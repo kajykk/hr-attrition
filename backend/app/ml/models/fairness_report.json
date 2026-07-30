@@ -1,0 +1,46 @@
+{
+  "default_threshold": 60,
+  "final_threshold": 60,
+  "mitigation_applied": false,
+  "dimensions": {
+    "gender": {
+      "groups": {
+        "F": 0.18960306266371146,
+        "M": 0.19793527893587454
+      },
+      "parity_difference": 0.008332216272163073,
+      "passed": true,
+      "label": "性别 (M/F)"
+    },
+    "age": {
+      "groups": {
+        "<35": 0.21122767224269917,
+        ">=35": 0.1843040321334775
+      },
+      "parity_difference": 0.026923640109221658,
+      "passed": true,
+      "label": "年龄 (<35 / >=35)"
+    },
+    "ethnicity": {
+      "groups": {
+        "少数民族": 0.19153225806451613,
+        "汉族": 0.19419642857142858
+      },
+      "parity_difference": 0.00266417050691245,
+      "passed": true,
+      "label": "民族 (汉族/少数民族)"
+    },
+    "disability": {
+      "groups": {
+        "无障碍": 0.19224301030060964,
+        "有障碍": 0.2242798353909465
+      },
+      "parity_difference": 0.03203682509033687,
+      "passed": true,
+      "label": "残障 (0/1)"
+    }
+  },
+  "max_parity_difference": 0.03203682509033687,
+  "target_max_parity": 0.05,
+  "overall_passed": true
+}

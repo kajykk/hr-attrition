@@ -1,0 +1,126 @@
+[
+  {
+    "feature": "overtime_flag",
+    "importance_gain": 172016.21661376953
+  },
+  {
+    "feature": "JobSatisfaction",
+    "importance_gain": 28311.267521858215
+  },
+  {
+    "feature": "YearsSinceLastPromotion",
+    "importance_gain": 28226.07806110382
+  },
+  {
+    "feature": "MonthlyIncome",
+    "importance_gain": 27706.971640586853
+  },
+  {
+    "feature": "EnvironmentSatisfaction",
+    "importance_gain": 20563.00182723999
+  },
+  {
+    "feature": "DistanceFromHome",
+    "importance_gain": 13182.937237739563
+  },
+  {
+    "feature": "Age",
+    "importance_gain": 7400.429405212402
+  },
+  {
+    "feature": "salary_percentile",
+    "importance_gain": 4405.226895332336
+  },
+  {
+    "feature": "promotion_gap_months",
+    "importance_gain": 2138.326307296753
+  },
+  {
+    "feature": "TotalWorkingYears",
+    "importance_gain": 1244.8940992355347
+  },
+  {
+    "feature": "tenure_ratio",
+    "importance_gain": 984.9667015075684
+  },
+  {
+    "feature": "PercentSalaryHike",
+    "importance_gain": 708.485595703125
+  },
+  {
+    "feature": "WorkLifeBalance",
+    "importance_gain": 626.6730966567993
+  },
+  {
+    "feature": "TrainingTimesLastYear",
+    "importance_gain": 540.3968000411987
+  },
+  {
+    "feature": "NumCompaniesWorked",
+    "importance_gain": 387.9345979690552
+  },
+  {
+    "feature": "JobLevel",
+    "importance_gain": 376.5434036254883
+  },
+  {
+    "feature": "YearsInCurrentRole",
+    "importance_gain": 320.36549949645996
+  },
+  {
+    "feature": "YearsWithCurrManager",
+    "importance_gain": 224.09770011901855
+  },
+  {
+    "feature": "dept_HR",
+    "importance_gain": 205.45309829711914
+  },
+  {
+    "feature": "YearsAtCompany",
+    "importance_gain": 190.26179695129395
+  },
+  {
+    "feature": "StockOptionLevel",
+    "importance_gain": 131.67839908599854
+  },
+  {
+    "feature": "Education",
+    "importance_gain": 124.12689971923828
+  },
+  {
+    "feature": "dept_RD",
+    "importance_gain": 117.49269771575928
+  },
+  {
+    "feature": "JobInvolvement",
+    "importance_gain": 113.17779922485352
+  },
+  {
+    "feature": "RelationshipSatisfaction",
+    "importance_gain": 86.9355993270874
+  },
+  {
+    "feature": "dept_Sales",
+    "importance_gain": 48.84210014343262
+  },
+  {
+    "feature": "business_travel_ord",
+    "importance_gain": 47.78489875793457
+  },
+  {
+    "feature": "PerformanceRating",
+    "importance_gain": 44.80159950256348
+  },
+  {
+    "feature": "marital_Single",
+    "importance_gain": 0.0
+  },
+  {
+    "feature": "marital_Married",
+    "importance_gain": 0.0
+  },
+  {
+    "feature": "marital_Divorced",
+    "importance_gain": 0.0
+  }
+]

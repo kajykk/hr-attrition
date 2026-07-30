@@ -1,0 +1,55 @@
+{
+  "sample_index": 536,
+  "actual_label": 1,
+  "predicted_score": 0.9152319997677384,
+  "feature_values": {
+    "Age": 51.0,
+    "DistanceFromHome": 16.0,
+    "Education": 1.0,
+    "EnvironmentSatisfaction": 1.0,
+    "JobInvolvement": 3.0,
+    "JobLevel": 1.0,
+    "JobSatisfaction": 2.0,
+    "MonthlyIncome": 3491.0,
+    "NumCompaniesWorked": 0.0,
+    "PercentSalaryHike": 25.0,
+    "PerformanceRating": 3.0,
+    "RelationshipSatisfaction": 1.0,
+    "StockOptionLevel": 0.0,
+    "TotalWorkingYears": 39.0,
+    "TrainingTimesLastYear": 3.0,
+    "WorkLifeBalance": 4.0,
+    "YearsAtCompany": 17.0,
+    "YearsInCurrentRole": 13.0,
+    "YearsSinceLastPromotion": 6.0,
+    "YearsWithCurrManager": 9.0,
+    "overtime_flag": 1.0,
+    "business_travel_ord": 1.0,
+    "dept_Sales": 0.0,
+    "dept_RD": 0.0,
+    "dept_HR": 1.0,
+    "marital_Single": 1.0,
+    "marital_Married": 0.0,
+    "marital_Divorced": 0.0,
+    "salary_percentile": 0.0655207054358745,
+    "promotion_gap_months": 6.0,
+    "tenure_ratio": 0.425
+  },
+  "top3_contributions": [
+    {
+      "feature": "overtime_flag",
+      "contribution": 1.3373331972658542,
+      "direction": "positive"
+    },
+    {
+      "feature": "YearsSinceLastPromotion",
+      "contribution": 0.6137985013342968,
+      "direction": "positive"
+    },
+    {
+      "feature": "MonthlyIncome",
+      "contribution": 0.5862736904254656,
+      "direction": "positive"
+    }
+  ]
+}

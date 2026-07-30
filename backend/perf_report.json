@@ -1,0 +1,69 @@
+{
+  "generated_at": "2026-07-27T20:16:41+0800",
+  "concurrent_users": 100,
+  "requests_per_user": 10,
+  "results": [
+    {
+      "path": "/health",
+      "label": "健康检查（无中间件开销）",
+      "concurrent_users": 100,
+      "requests_per_user": 10,
+      "total_requests": 1000,
+      "success_count": 1000,
+      "success_rate": 1.0,
+      "wall_time_s": 1.376,
+      "throughput_rps": 726.7,
+      "latency_ms": {
+        "p50": 49.61,
+        "p90": 98.27,
+        "p95": 105.95,
+        "p99": 111.57,
+        "max": 118.21,
+        "mean": 55.29
+      }
+    },
+    {
+      "path": "/",
+      "label": "根路径",
+      "concurrent_users": 100,
+      "requests_per_user": 10,
+      "total_requests": 1000,
+      "success_count": 1000,
+      "success_rate": 1.0,
+      "wall_time_s": 1.249,
+      "throughput_rps": 800.4,
+      "latency_ms": {
+        "p50": 41.9,
+        "p90": 59.12,
+        "p95": 123.31,
+        "p99": 134.81,
+        "max": 137.59,
+        "mean": 47.17
+      }
+    },
+    {
+      "path": "/openapi.json",
+      "label": "OpenAPI Spec（重负载）",
+      "concurrent_users": 100,
+      "requests_per_user": 10,
+      "total_requests": 1000,
+      "success_count": 1000,
+      "success_rate": 1.0,
+      "wall_time_s": 1.804,
+      "throughput_rps": 554.2,
+      "latency_ms": {
+        "p50": 90.36,
+        "p90": 155.25,
+        "p95": 242.1,
+        "p99": 251.04,
+        "max": 253.67,
+        "mean": 104.93
+      }
+    }
+  ],
+  "targets": {
+    "P-PERF-01_p99_ms": 1000,
+    "P-PERF-02_p99_ms": 5000,
+    "P-PERF-05_concurrent": 100
+  }
+}

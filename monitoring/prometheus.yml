@@ -1,0 +1,40 @@
+# Prometheus 配置（D03 7.1 指标采集）
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # FastAPI 后端指标（/metrics 端点，需 prometheus-fastapi-instrumentator）
+  - job_name: "hra-api"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          service: "api"
+          env: "local"
+
+  # Celery Worker 指标（需 flower 或 prometheus-celery-exporter）
+  - job_name: "hra-celery"
+    static_configs:
+      - targets: ["worker:9808"]
+        labels:
+          service: "celery-worker"
+
+  # Prometheus 自监控
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # PostgreSQL 指标（需 postgres_exporter，可选）
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres:9187"]
+        labels:
+          service: "postgres"
+
+  # Redis 指标（需 redis_exporter，可选）
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis:9121"]
+        labels:
+          service: "redis"

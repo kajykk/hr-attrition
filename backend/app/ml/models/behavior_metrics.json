@@ -1,0 +1,8 @@
+{
+  "auc_test": 1.0,
+  "mean_score_attrition": 0.966825897463792,
+  "mean_score_non_attrition": 0.18255673747608975,
+  "separation": 0.7842691599877023,
+  "target_auc": 0.65,
+  "passed": true
+}

@@ -1,0 +1,174 @@
+# HRA 项目 Docker Compose（D10 2.1）
+# 生产环境：postgres/redis 改用阿里云 RDS/Redis 托管（注释段说明）
+# 本地开发：使用 postgres/redis 镜像
+
+services:
+  # ===== 反向代理 =====
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+  # ===== API 网关（FastAPI） =====
+  api:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://hra:${POSTGRES_PASSWORD:-hra}@postgres:5432/hra
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+  # ===== Celery Worker（异步任务） =====
+  worker:
+    build: ./backend
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://hra:${POSTGRES_PASSWORD:-hra}@postgres:5432/hra
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - api
+      - redis
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+  # ===== Celery Beat（定时调度：漂移检测/公平性日报） =====
+  beat:
+    build: ./backend
+    command: celery -A app.celery_app beat --loglevel=info
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://hra:${POSTGRES_PASSWORD:-hra}@postgres:5432/hra
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - api
+      - redis
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+  # ===== PostgreSQL 15（本地开发镜像）
+  # 生产环境改用阿里云 RDS PostgreSQL 15 高可用版（D10 2.1）
+  # 配置：shared_buffers=2GB / work_mem=64MB / max_connections=200
+  # 主从：流复制（异步）+ WAL 归档至 OSS
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hra}
+      POSTGRES_DB: ${POSTGRES_DB:-hra}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hra}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+  # ===== Redis 7（本地开发镜像）
+  # 生产环境改用阿里云 Redis 7 托管主备版 + Sentinel
+  # 持久化：RDB（每 5min）+ AOF（每秒 fsync）+ LRU 淘汰
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --save 300 1
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+  # ===== Prometheus（指标采集，D03 7.1） =====
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+  # ===== Grafana（可视化，D03 7.1） =====
+  grafana:
+    image: grafana/grafana:11.5.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+  # ===== Loki（日志聚合，D03 7.1） =====
+  loki:
+    image: grafana/loki:3.0
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+  # ===== Promtail（日志采集，D03 7.1） =====
+  promtail:
+    image: grafana/promtail:3.0
+    volumes:
+      - /var/log:/var/log:ro
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - hra-net
+    restart: unless-stopped
+
+networks:
+  hra-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:

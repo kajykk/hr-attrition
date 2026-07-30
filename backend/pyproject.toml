@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hra-backend"
+version = "1.0.0"
+description = "HRA 企业员工离职风险与人才流失预警系统 - 后端"
+requires-python = ">=3.11"
+readme = { text = "HRA Backend", content-type = "text/plain" }
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "cryptography>=42.0.0",
+    "celery>=5.4.0",
+    "redis>=5.0.0",
+    "httpx>=0.27.0",
+    "slowapi>=0.1.9",
+    "websockets>=12.0",
+    "python-multipart>=0.0.9",
+    "email-validator>=2.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+    "ruff>=0.5.0",
+]
+ml = [
+    # 数据处理
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.5.0,<2.0.0",
+    "joblib>=1.4.2",
+    # 结构化模型（D03 4.1 指定 LightGBM）
+    "lightgbm>=4.3.0",
+    # 合成数据（D02 5.4 SDV/CTGAN）
+    "sdv>=1.17.0",
+    # SHAP 解释（D03 4.3）
+    "shap>=0.45.0",
+    # 可视化
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+]
+ml-text = [
+    # BERT 文本模型（D03 4.1 MacBERT，T-304，需单独安装）
+    "torch>=2.1.0",
+    "transformers>=4.36.0",
+    "onnxruntime>=1.18.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+# 排除一次性训练脚本（不属于运行时代码）与字节码缓存
+omit = [
+    "app/ml/train_*.py",
+    "app/ml/train_pipeline.py",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+# 排除 __main__ 块与平台特定分支
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+# 跳过空文件
+skip_empty = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

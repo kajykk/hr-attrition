@@ -1,0 +1,3 @@
+# Alembic 迁移脚本目录（D04 6.1）
+# 命名规范：{YYYYMMDD}_{HHMM}_{slug}.py
+# 生成：alembic revision --autogenerate -m "create tenants users employees"
