@@ -4,17 +4,23 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class EmployeeCreate(BaseModel):
-    """新增员工请求体 - 明文 PII 由服务层加密后入库."""
+    """新增员工请求体 - 明文 PII 由服务层加密后入库.
+
+    P2-9 校验补齐：
+      - email 格式（EmailStr）
+      - birth_date 不得晚于 hire_date（若两者均提供）
+      - salary_percentile 已有 ge/le 约束
+    """
 
     employee_no: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=100, description="姓名（明文，服务层 Fernet 加密）")
     id_card: Optional[str] = Field(default=None, description="身份证号（明文）")
     phone: Optional[str] = Field(default=None, description="手机号（明文）")
-    email: Optional[str] = None
+    email: Optional[EmailStr] = None
     gender: Optional[str] = Field(default=None, max_length=10, description="仅公平性审计，模型禁用")
     ethnicity: Optional[str] = Field(default=None, description="民族（明文，V1.1 新增，单独同意）")
     disability: Optional[str] = Field(default=None, description="残疾状况（明文，V1.1 新增，单独同意）")
@@ -25,6 +31,12 @@ class EmployeeCreate(BaseModel):
     hire_date: date
     salary: Optional[str] = Field(default=None, description="薪资绝对值（明文）")
     salary_percentile: Optional[Decimal] = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _check_dates(self):
+        if self.birth_date and self.hire_date and self.birth_date > self.hire_date:
+            raise ValueError("出生日期不得晚于入职日期")
+        return self
 
 
 class EmployeeListItem(BaseModel):
@@ -74,6 +86,12 @@ class EmployeeLeaveUpdate(BaseModel):
 
     leave_date: date
     leave_reason: Optional[str] = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def _check_leave_date(self):
+        if self.leave_date > date.today():
+            raise ValueError("离职日期不得晚于今天")
+        return self
 
 
 class PaginatedEmployees(BaseModel):

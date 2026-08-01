@@ -98,23 +98,27 @@ export interface KillSwitchStatus {
 }
 
 // 预警状态机变更请求（PATCH /warnings/{id}/status）
+// operator_id 已弃用：操作人由后端从当前登录用户派生，前端不再传
 export interface WarningStatusUpdate {
   target_status: WarningOut['status']
-  operator_id: string
+  /** @deprecated 由后端从当前登录用户派生 */
+  operator_id?: string
   comment?: string
 }
 
 // 预警申诉请求（POST /warnings/{id}/appeal）
 export interface AppealRequest {
   reason: string
-  operator_id: string
+  /** @deprecated 由后端从当前登录用户派生 */
+  operator_id?: string
 }
 
 // 预警标记请求（POST /warnings/{id}/mark）
 export interface MarkRequest {
   mark_type: 'false_positive' | 'watching' | 'communicated'
   comment: string
-  operator_id: string
+  /** @deprecated 由后端从当前登录用户派生 */
+  operator_id?: string
 }
 
 // 健康检查响应（GET /health）

@@ -4,6 +4,9 @@ import { ref, computed, onMounted } from 'vue'
 import { apiClient } from '@/api/client'
 import type { EmployeeListItem, WarningOut, Paginated, KillSwitchStatus } from '@/api/types'
 
+// 演示数据仅限开发环境；生产环境失败展示真实错误
+const allowDemo = import.meta.env.DEV
+
 interface KpiStats {
   totalEmployees: number
   highRiskCount: number
@@ -54,67 +57,71 @@ const distMax = computed(() => Math.max(1, ...distribution.value.map((d) => d.co
 async function loadDashboard() {
   loading.value = true
   errorMsg.value = ''
-  let anySuccess = false
-  // 并发拉取数据，任意失败都用占位
-  const tasks: Promise<void>[] = [
-    // 1. 员工总数 + 风险分布（取第一页全部员工）
-    apiClient
-      .get<Paginated<EmployeeListItem>>('/api/v1/employees', { params: { page: 1, page_size: 200 } })
-      .then(({ data }) => {
-        anySuccess = true
-        stats.value.totalEmployees = data.total
-        // 分布统计
-        const dist: Record<string, number> = {
-          low: 0,
-          medium_low: 0,
-          medium: 0,
-          medium_high: 0,
-          high: 0,
-        }
-        for (const e of data.items) {
-          if (e.risk_level && dist[e.risk_level] !== undefined) dist[e.risk_level]++
-        }
-        distribution.value = Object.entries(dist).map(([level, count]) => ({ level, count }))
-        stats.value.highRiskCount = (dist.medium_high || 0) + (dist.high || 0)
-      })
-      .catch(() => {}),
-    // 2. 待处理预警数 + 最近 5 条预警
-    apiClient
-      .get<Paginated<WarningOut>>('/api/v1/warnings', { params: { page: 1, page_size: 5 } })
-      .then(({ data }) => {
-        anySuccess = true
-        recentWarnings.value = data.items
-        // 再取一次全部未关闭预警统计待处理数
-        return apiClient.get<Paginated<WarningOut>>('/api/v1/warnings', {
-          params: { page: 1, page_size: 1, status: 'new' },
-        })
-      })
-      .then(({ data }) => {
-        stats.value.pendingWarnings = data.total
-      })
-      .catch(() => {}),
+  const failures: string[] = []
+  const results = await Promise.allSettled([
+    // 1. 员工总数 + 风险分布
+    apiClient.get<Paginated<EmployeeListItem>>('/api/v1/employees', {
+      params: { page: 1, page_size: 200 },
+    }),
+    // 2. 最近 5 条预警 + 待处理数（并行）
+    apiClient.get<Paginated<WarningOut>>('/api/v1/warnings', { params: { page: 1, page_size: 5 } }),
+    apiClient.get<Paginated<WarningOut>>('/api/v1/warnings', {
+      params: { page: 1, page_size: 1, status: 'new' },
+    }),
     // 3. Kill Switch 状态
-    apiClient
-      .get<KillSwitchStatus>('/api/v1/admin/kill-switch')
-      .then(({ data }) => {
-        anySuccess = true
-        killSwitch.value = data
-      })
-      .catch(() => {}),
+    apiClient.get<KillSwitchStatus>('/api/v1/admin/kill-switch'),
     // 4. 模型版本（从全局解释接口取）
-    apiClient
-      .get<{ model_version: string }>('/api/v1/risk/global-explanation', { params: { window_days: 30 } })
-      .then(({ data }) => {
-        anySuccess = true
-        stats.value.modelVersion = data.model_version
-      })
-      .catch(() => {}),
-  ]
-  await Promise.all(tasks)
-  if (!anySuccess) {
-    demoMode.value = true
-    errorMsg.value = '后端 API 不可用，已切换到演示模式（占位数据）'
-    fillDemoPlaceholders()
+    apiClient.get<{ model_version: string }>('/api/v1/risk/global-explanation', {
+      params: { window_days: 30 },
+    }),
+  ])
+  const ok = (r: PromiseSettledResult<unknown>) => r.status === 'fulfilled'
+
+  if (ok(results[0])) {
+    const data = (results[0] as PromiseFulfilledResult<{ data: Paginated<EmployeeListItem> }>).value.data
+    stats.value.totalEmployees = data.total
+    const dist: Record<string, number> = {
+      low: 0,
+      medium_low: 0,
+      medium: 0,
+      medium_high: 0,
+      high: 0,
+    }
+    for (const e of data.items) {
+      if (e.risk_level && dist[e.risk_level] !== undefined) dist[e.risk_level]++
+    }
+    distribution.value = Object.entries(dist).map(([level, count]) => ({ level, count }))
+    stats.value.highRiskCount = (dist.medium_high || 0) + (dist.high || 0)
+  } else {
+    failures.push('员工统计')
+  }
+  if (ok(results[1])) {
+    recentWarnings.value = (results[1] as PromiseFulfilledResult<{ data: Paginated<WarningOut> }>).value.data.items
+  } else {
+    failures.push('最近预警')
+  }
+  if (ok(results[2])) {
+    stats.value.pendingWarnings = (results[2] as PromiseFulfilledResult<{ data: Paginated<WarningOut> }>).value.data.total
+  }
+  if (ok(results[3])) {
+    killSwitch.value = (results[3] as PromiseFulfilledResult<{ data: KillSwitchStatus }>).value.data
+  } else {
+    failures.push('Kill Switch 状态')
+  }
+  if (ok(results[4])) {
+    stats.value.modelVersion = (results[4] as PromiseFulfilledResult<{ data: { model_version: string } }>).value.data.model_version
+  } else {
+    failures.push('模型版本')
+  }
+
+  if (failures.length > 0) {
+    errorMsg.value = `部分数据加载失败：${failures.join('、')}`
+    // 演示数据仅限开发环境
+    if (allowDemo && failures.length >= 4) {
+      demoMode.value = true
+      errorMsg.value += '（开发环境演示数据）'
+      fillDemoPlaceholders()
+    }
   }
   loading.value = false
 }
@@ -198,73 +205,140 @@ onMounted(loadDashboard)
 
 <template>
   <div class="page">
-    <h2 class="page-title">仪表盘</h2>
-    <p class="page-desc">HR 经理视角的离职风险概览（KPI / 风险分布 / 最近预警 / 治理状态）</p>
+    <h2 class="page-title">
+      仪表盘
+    </h2>
+    <p class="page-desc">
+      HR 经理视角的离职风险概览（KPI / 风险分布 / 最近预警 / 治理状态）
+    </p>
 
-    <div v-if="killSwitch.active" class="banner danger">
+    <div
+      v-if="killSwitch.active"
+      class="banner danger"
+    >
       <span>🚫 Kill Switch 已激活：{{ killSwitch.reason || '未提供原因' }}</span>
-      <span v-if="killSwitch.activated_at" style="margin-left:auto; font-size:12px;">
+      <span
+        v-if="killSwitch.activated_at"
+        style="margin-left:auto; font-size:12px;"
+      >
         激活时间：{{ fmtTime(killSwitch.activated_at) }} | 操作人：{{ killSwitch.activated_by || '-' }}
       </span>
     </div>
-    <div v-if="demoMode" class="banner warning">
+    <div
+      v-if="demoMode"
+      class="banner warning"
+    >
       <span>⚠ {{ errorMsg }}</span>
     </div>
 
     <!-- KPI 卡片行 -->
     <div class="kpi-grid">
       <div class="kpi-card">
-        <div class="kpi-label">在职员工</div>
-        <div class="kpi-value">{{ stats.totalEmployees }}</div>
-        <div class="kpi-foot">总数</div>
+        <div class="kpi-label">
+          在职员工
+        </div>
+        <div class="kpi-value">
+          {{ stats.totalEmployees }}
+        </div>
+        <div class="kpi-foot">
+          总数
+        </div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">高风险人数</div>
-        <div class="kpi-value risk-high">{{ stats.highRiskCount }}</div>
-        <div class="kpi-foot">含中高 + 高</div>
+        <div class="kpi-label">
+          高风险人数
+        </div>
+        <div class="kpi-value risk-high">
+          {{ stats.highRiskCount }}
+        </div>
+        <div class="kpi-foot">
+          含中高 + 高
+        </div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">待处理预警</div>
-        <div class="kpi-value risk-medium">{{ stats.pendingWarnings }}</div>
-        <div class="kpi-foot">status=new</div>
+        <div class="kpi-label">
+          待处理预警
+        </div>
+        <div class="kpi-value risk-medium">
+          {{ stats.pendingWarnings }}
+        </div>
+        <div class="kpi-foot">
+          status=new
+        </div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">模型版本</div>
-        <div class="kpi-value model-version">{{ stats.modelVersion }}</div>
-        <div class="kpi-foot">融合模型</div>
+        <div class="kpi-label">
+          模型版本
+        </div>
+        <div class="kpi-value model-version">
+          {{ stats.modelVersion }}
+        </div>
+        <div class="kpi-foot">
+          融合模型
+        </div>
       </div>
     </div>
 
     <div class="grid-2">
       <!-- 风险等级分布 -->
       <div class="card">
-        <h3 class="card-title">风险等级分布</h3>
+        <h3 class="card-title">
+          风险等级分布
+        </h3>
         <div class="dist-chart">
-          <div v-for="d in distribution" :key="d.level" class="dist-row">
+          <div
+            v-for="d in distribution"
+            :key="d.level"
+            class="dist-row"
+          >
             <div class="dist-label">
-              <span class="dot" :style="{ background: levelColors[d.level] }"></span>
+              <span
+                class="dot"
+                :style="{ background: levelColors[d.level] }"
+              />
               {{ levelLabels[d.level] }}
             </div>
             <div class="dist-bar-bg">
               <div
                 class="dist-bar"
                 :style="{ width: (d.count / distMax) * 100 + '%', background: levelColors[d.level] }"
-              ></div>
+              />
             </div>
-            <div class="dist-count">{{ d.count }}</div>
+            <div class="dist-count">
+              {{ d.count }}
+            </div>
           </div>
         </div>
       </div>
 
       <!-- 最近 5 条预警 -->
       <div class="card">
-        <h3 class="card-title">最近预警</h3>
-        <div v-if="recentWarnings.length === 0" class="empty">暂无预警数据</div>
-        <ul v-else class="warning-list">
-          <li v-for="w in recentWarnings" :key="w.id" class="warning-item">
-            <span :class="levelBadgeClass(w.level)" style="margin-right:8px;">{{ w.level }}</span>
+        <h3 class="card-title">
+          最近预警
+        </h3>
+        <div
+          v-if="recentWarnings.length === 0"
+          class="empty"
+        >
+          暂无预警数据
+        </div>
+        <ul
+          v-else
+          class="warning-list"
+        >
+          <li
+            v-for="w in recentWarnings"
+            :key="w.id"
+            class="warning-item"
+          >
+            <span
+              :class="levelBadgeClass(w.level)"
+              style="margin-right:8px;"
+            >{{ w.level }}</span>
             <div class="warning-body">
-              <div class="warning-msg">{{ w.message || '无说明' }}</div>
+              <div class="warning-msg">
+                {{ w.message || '无说明' }}
+              </div>
               <div class="warning-meta">
                 员工 {{ w.employee_id }} · 分 {{ w.risk_score }}
                 · <span :class="'status-chip ' + w.status">{{ w.status }}</span>

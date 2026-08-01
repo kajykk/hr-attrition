@@ -2,13 +2,16 @@
 // 风险预测视图 - 预测卡片 + 各模态分 + SHAP 归因 + 全局特征重要性
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { apiClient } from '@/api/client'
+import { apiClient, extractApiError } from '@/api/client'
 import type {
   RiskPredictionOut,
   ShapExplanationOut,
   GlobalExplanationOut,
   ShapFactor,
 } from '@/api/types'
+
+// 演示数据仅限开发环境；生产环境失败展示真实错误
+const allowDemo = import.meta.env.DEV
 
 const route = useRoute()
 
@@ -18,6 +21,7 @@ const explanation = ref<ShapExplanationOut | null>(null)
 const globalExp = ref<GlobalExplanationOut | null>(null)
 const loading = ref(false)
 const errorMsg = ref('')
+const demoMode = ref(false)
 
 const levelLabels: Record<string, string> = {
   low: '低风险',
@@ -74,6 +78,7 @@ async function predict() {
   if (!employeeId.value) return
   loading.value = true
   errorMsg.value = ''
+  demoMode.value = false
   result.value = null
   explanation.value = null
   try {
@@ -85,9 +90,12 @@ async function predict() {
     // 预测成功后并行拉取 SHAP 解释
     loadExplanation(employeeId.value)
   } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string } } }
-    errorMsg.value = err?.response?.data?.detail || '预测失败，使用演示数据'
-    fillDemoPrediction()
+    errorMsg.value = extractApiError(e, '预测失败')
+    if (allowDemo) {
+      demoMode.value = true
+      errorMsg.value += '（开发环境演示数据）'
+      fillDemoPrediction()
+    }
   } finally {
     loading.value = false
   }
@@ -100,8 +108,7 @@ async function loadExplanation(empId: string) {
     )
     explanation.value = data
   } catch {
-    // 解释失败时填演示数据
-    fillDemoExplanation()
+    // 解释失败：不静默填充假数据，生产环境保留空态
   }
 }
 
@@ -112,7 +119,7 @@ async function loadGlobal() {
     })
     globalExp.value = data
   } catch {
-    fillDemoGlobal()
+    // 全局特征失败：不静默填充假数据，生产环境保留空态
   }
 }
 
@@ -147,23 +154,6 @@ function fillDemoExplanation() {
   }
 }
 
-function fillDemoGlobal() {
-  const features: ShapFactor[] = [
-    { feature: 'overtime_hours_30d', display_name: '近30天加班时长', contribution: 0.34, direction: 'positive' },
-    { feature: 'days_since_last_login', display_name: '上次登录至今天数', contribution: 0.27, direction: 'positive' },
-    { feature: 'perf_change_ratio', display_name: '绩效环比变化', contribution: 0.21, direction: 'positive' },
-    { feature: 'salary_competitiveness', display_name: '薪酬竞争力', contribution: 0.17, direction: 'positive' },
-    { feature: 'manager_change_90d', display_name: '90天内换直属上级', contribution: 0.14, direction: 'positive' },
-    { feature: 'leave_balance', display_name: '剩余年假', contribution: 0.11, direction: 'negative' },
-  ]
-  globalExp.value = {
-    model_version: 'fusion-v3.2',
-    window_days: 30,
-    top_features: features,
-    computed_at: new Date().toISOString(),
-  }
-}
-
 function fmtTime(s: string) {
   if (!s) return '-'
   try {
@@ -194,10 +184,25 @@ onMounted(() => {
 
 <template>
   <div class="page">
-    <h2 class="page-title">风险预测</h2>
-    <p class="page-desc">多模态融合引擎（结构化 + 行为 + 文本），D05 3.3 POST /risk/predict + SHAP 解释</p>
+    <h2 class="page-title">
+      风险预测
+    </h2>
+    <p class="page-desc">
+      多模态融合引擎（结构化 + 行为 + 文本），D05 3.3 POST /risk/predict + SHAP 解释
+    </p>
 
-    <div v-if="errorMsg" class="banner warning">⚠ {{ errorMsg }}</div>
+    <div
+      v-if="errorMsg"
+      class="banner warning"
+    >
+      ⚠ {{ errorMsg }}
+    </div>
+    <div
+      v-if="demoMode"
+      class="banner"
+    >
+      开发环境演示数据（后端不可用）
+    </div>
 
     <!-- 员工选择 -->
     <div class="card input-card">
@@ -206,30 +211,54 @@ onMounted(() => {
           v-model="employeeId"
           placeholder="输入员工 ID（如 emp-001）"
           @keyup.enter="predict"
-        />
-        <button @click="predict" :disabled="loading || !employeeId">
+        >
+        <button
+          :disabled="loading || !employeeId"
+          @click="predict"
+        >
           {{ loading ? '预测中...' : '预测风险' }}
         </button>
       </div>
     </div>
 
-    <div v-if="!result && !loading" class="empty card">请输入员工 ID 并点击"预测风险"</div>
+    <div
+      v-if="!result && !loading"
+      class="empty card"
+    >
+      请输入员工 ID 并点击"预测风险"
+    </div>
 
     <!-- 预测结果卡片 -->
-    <div v-if="result" class="result-grid">
+    <div
+      v-if="result"
+      class="result-grid"
+    >
       <div class="card pred-card">
-        <h3 class="card-title">预测结果</h3>
+        <h3 class="card-title">
+          预测结果
+        </h3>
         <div class="pred-main">
-          <div class="score-circle" :style="{ borderColor: levelColors[result.risk_level] || '#999' }">
-            <div class="score-num" :style="{ color: levelColors[result.risk_level] || '#999' }">
+          <div
+            class="score-circle"
+            :style="{ borderColor: levelColors[result.risk_level] || '#999' }"
+          >
+            <div
+              class="score-num"
+              :style="{ color: levelColors[result.risk_level] || '#999' }"
+            >
               {{ result.risk_score }}
             </div>
-            <div class="score-unit">/100</div>
+            <div class="score-unit">
+              /100
+            </div>
           </div>
           <div class="pred-meta">
             <div class="meta-row">
               <span class="meta-label">风险等级：</span>
-              <span class="risk-chip" :class="result.risk_level">
+              <span
+                class="risk-chip"
+                :class="result.risk_level"
+              >
                 {{ levelLabels[result.risk_level] || result.risk_level }}
               </span>
             </div>
@@ -256,26 +285,50 @@ onMounted(() => {
 
         <!-- 各模态分数 -->
         <div class="modality-section">
-          <h4 class="section-title">各模态分数</h4>
-          <div v-for="(v, k) in result.modality_scores" :key="k" class="modality-row">
-            <div class="modality-label">{{ modalityLabels[k] || k }}</div>
+          <h4 class="section-title">
+            各模态分数
+          </h4>
+          <div
+            v-for="(v, k) in result.modality_scores"
+            :key="k"
+            class="modality-row"
+          >
+            <div class="modality-label">
+              {{ modalityLabels[k] || k }}
+            </div>
             <div class="modality-bar-bg">
               <div
                 class="modality-bar"
                 :style="{ width: (v / modalityMax) * 100 + '%' }"
-              ></div>
+              />
             </div>
-            <div class="modality-value">{{ v.toFixed(1) }}</div>
+            <div class="modality-value">
+              {{ v.toFixed(1) }}
+            </div>
           </div>
         </div>
       </div>
 
       <!-- SHAP 归因卡片 -->
       <div class="card shap-card">
-        <h3 class="card-title">SHAP 归因（Top3 因子）</h3>
-        <div v-if="top3Factors.length === 0" class="empty">暂无 SHAP 数据</div>
-        <ul v-else class="shap-list">
-          <li v-for="f in top3Factors" :key="f.feature" class="shap-item">
+        <h3 class="card-title">
+          SHAP 归因（Top3 因子）
+        </h3>
+        <div
+          v-if="top3Factors.length === 0"
+          class="empty"
+        >
+          暂无 SHAP 数据
+        </div>
+        <ul
+          v-else
+          class="shap-list"
+        >
+          <li
+            v-for="f in top3Factors"
+            :key="f.feature"
+            class="shap-item"
+          >
             <div class="shap-head">
               <span class="shap-name">{{ f.display_name }}</span>
               <span
@@ -295,16 +348,24 @@ onMounted(() => {
                     width: (Math.abs(f.contribution) / shapMaxAbs) * 100 + '%',
                     background: f.direction === 'positive' ? 'var(--risk-high)' : 'var(--risk-low)',
                   }"
-                ></div>
+                />
               </div>
               <div class="shap-value">
                 值：<code>{{ f.value ?? '-' }}</code>
               </div>
             </div>
-            <div v-if="f.description" class="shap-desc">{{ f.description }}</div>
+            <div
+              v-if="f.description"
+              class="shap-desc"
+            >
+              {{ f.description }}
+            </div>
           </li>
         </ul>
-        <div v-if="explanation" class="shap-foot">
+        <div
+          v-if="explanation"
+          class="shap-foot"
+        >
           <span>base_value：{{ explanation.base_value.toFixed(3) }}</span>
           <span>output_value：{{ explanation.output_value.toFixed(3) }}</span>
           <span>计算时间：{{ fmtTime(explanation.computed_at) }}</span>
@@ -313,22 +374,46 @@ onMounted(() => {
     </div>
 
     <!-- 全局特征重要性 -->
-    <div class="card" style="margin-top:16px;">
-      <h3 class="card-title">全局特征重要性（最近 {{ globalExp?.window_days || 30 }} 天 Top5）</h3>
-      <div v-if="top5Global.length === 0" class="empty">暂无全局特征数据</div>
-      <ul v-else class="global-list">
-        <li v-for="f in top5Global" :key="f.feature" class="global-item">
-          <div class="global-name">{{ f.display_name }}</div>
+    <div
+      class="card"
+      style="margin-top:16px;"
+    >
+      <h3 class="card-title">
+        全局特征重要性（最近 {{ globalExp?.window_days || 30 }} 天 Top5）
+      </h3>
+      <div
+        v-if="top5Global.length === 0"
+        class="empty"
+      >
+        暂无全局特征数据
+      </div>
+      <ul
+        v-else
+        class="global-list"
+      >
+        <li
+          v-for="f in top5Global"
+          :key="f.feature"
+          class="global-item"
+        >
+          <div class="global-name">
+            {{ f.display_name }}
+          </div>
           <div class="global-bar-bg">
             <div
               class="global-bar"
               :style="{ width: (Math.abs(f.contribution) / globalMaxAbs) * 100 + '%' }"
-            ></div>
+            />
           </div>
-          <div class="global-value">{{ f.contribution.toFixed(3) }}</div>
+          <div class="global-value">
+            {{ f.contribution.toFixed(3) }}
+          </div>
         </li>
       </ul>
-      <div v-if="globalExp" class="shap-foot">
+      <div
+        v-if="globalExp"
+        class="shap-foot"
+      >
         <span>模型版本：{{ globalExp.model_version }}</span>
         <span>计算时间：{{ fmtTime(globalExp.computed_at) }}</span>
       </div>

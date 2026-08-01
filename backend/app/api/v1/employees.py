@@ -6,12 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_role
 from app.core.security import decrypt_pii, encrypt_pii, pii_hash
 from app.core.tenant import get_current_tenant_id
 from app.db.session import get_db
 from app.models.department import Department
 from app.models.employee import Employee
+from app.models.risk_prediction import RiskPrediction
 from app.models.user import ROLE_ADMIN, ROLE_HRBP, ROLE_HR_MANAGER, ROLE_MANAGER, User
 from app.schemas.employee import (
     EmployeeCreate, EmployeeDetail, EmployeeLeaveUpdate, EmployeeListItem,
@@ -19,6 +20,9 @@ from app.schemas.employee import (
 )
 
 router = APIRouter()
+
+# 员工管理角色（增改/离职标记）：HR 经理 / HRBP / 管理员
+_HR_ROLES = (ROLE_ADMIN, ROLE_HR_MANAGER, ROLE_HRBP)
 
 
 def _mask_name(name: str) -> str:
@@ -42,6 +46,20 @@ def _mask_id_card(id_card: str) -> str:
     return id_card[:3] + "*" * (len(id_card) - 7) + id_card[-4:]
 
 
+def _latest_prediction_subquery():
+    """每个员工最新一条预测（DISTINCT ON employee_id，按 predicted_at 降序）."""
+    return (
+        select(
+            RiskPrediction.employee_id,
+            RiskPrediction.risk_score,
+            RiskPrediction.risk_level,
+        )
+        .distinct(RiskPrediction.employee_id)
+        .order_by(RiskPrediction.employee_id, RiskPrediction.predicted_at.desc())
+        .subquery()
+    )
+
+
 @router.get("", response_model=PaginatedEmployees)
 async def list_employees(
     page: int = Query(1, ge=1),
@@ -52,11 +70,22 @@ async def list_employees(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """员工列表（D05 3.2 GET /employees，按租户隔离 + 脱敏）."""
+    """员工列表（D05 3.2 GET /employees，按租户隔离 + 脱敏）.
+
+    keyword 服务端过滤：工号前缀匹配（ILIKE）或姓名哈希精确匹配（PII 无法明文 LIKE）。
+    列表项附带最新预测的风险分/等级（LEFT JOIN 最新 risk_prediction）。
+    """
     tenant_id = get_current_tenant_id()
 
-    stmt = select(Employee, Department.name.label("dept_name")).outerjoin(
+    latest = _latest_prediction_subquery()
+
+    stmt = select(
+        Employee, Department.name.label("dept_name"),
+        latest.c.risk_score, latest.c.risk_level,
+    ).outerjoin(
         Department, Employee.department_id == Department.id
+    ).outerjoin(
+        latest, Employee.id == latest.c.employee_id
     ).where(
         Employee.tenant_id == tenant_id,
         Employee.deleted_at.is_(None),
@@ -65,8 +94,15 @@ async def list_employees(
         stmt = stmt.where(Employee.department_id == department_id)
     if status_filter:
         stmt = stmt.where(Employee.status == status_filter)
+    if keyword:
+        kw = keyword.strip()
+        if kw:
+            stmt = stmt.where(
+                (Employee.employee_no.ilike(f"{kw}%"))
+                | (Employee.name_hash == pii_hash(kw))
+            )
 
-    # 总数
+    # 总数（与过滤条件一致）
     count_stmt = select(func.count()).select_from(Employee).where(
         Employee.tenant_id == tenant_id,
         Employee.deleted_at.is_(None),
@@ -75,6 +111,12 @@ async def list_employees(
         count_stmt = count_stmt.where(Employee.department_id == department_id)
     if status_filter:
         count_stmt = count_stmt.where(Employee.status == status_filter)
+    if keyword and keyword.strip():
+        kw = keyword.strip()
+        count_stmt = count_stmt.where(
+            (Employee.employee_no.ilike(f"{kw}%"))
+            | (Employee.name_hash == pii_hash(kw))
+        )
     total = (await db.execute(count_stmt)).scalar_one()
 
     # 分页
@@ -82,7 +124,7 @@ async def list_employees(
     rows = (await db.execute(stmt)).all()
 
     items = []
-    for emp, dept_name in rows:
+    for emp, dept_name, risk_score, risk_level in rows:
         name_plain = decrypt_pii(emp.name_encrypted) or ""
         items.append(
             EmployeeListItem(
@@ -92,8 +134,8 @@ async def list_employees(
                 department_name=dept_name,
                 position=emp.position,
                 status=emp.status,
-                risk_score=None,
-                risk_level=None,
+                risk_score=risk_score,
+                risk_level=risk_level,
                 updated_at=emp.updated_at,
             )
         )
@@ -151,7 +193,7 @@ async def get_employee(
 async def create_employee(
     payload: EmployeeCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(*_HR_ROLES)),
 ):
     """新增员工（D05 3.2 POST /employees）.
 
@@ -160,6 +202,30 @@ async def create_employee(
       - 配套 hash 字段（name_hash/ethnicity_hash/disability_hash）用于检索
     """
     tenant_id = get_current_tenant_id()
+
+    # 工号租户内唯一预检（DB 有 uq_employees_no_tenant，预检返回 409 而非 500）
+    dup_stmt = select(Employee.id).where(
+        Employee.tenant_id == tenant_id,
+        Employee.employee_no == payload.employee_no,
+        Employee.deleted_at.is_(None),
+    )
+    if (await db.execute(dup_stmt)).scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"工号 {payload.employee_no} 已存在",
+        )
+
+    # 校验部门属于当前租户（防跨租户引用，M10）
+    if payload.department_id is not None:
+        dept_stmt = select(Department.id).where(
+            Department.id == payload.department_id,
+            Department.tenant_id == tenant_id,
+        )
+        if (await db.execute(dept_stmt)).scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="部门不存在或不属于当前租户",
+            )
 
     emp = Employee(
         tenant_id=tenant_id,
@@ -218,7 +284,7 @@ async def mark_leave(
     employee_id: UUID,
     payload: EmployeeLeaveUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(*_HR_ROLES)),
 ):
     """离职标记（D05 3.10 PATCH /employees/{id}/leave，FR-EMP-008）."""
     tenant_id = get_current_tenant_id()

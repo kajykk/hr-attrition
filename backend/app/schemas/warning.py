@@ -1,6 +1,6 @@
 """预警 schemas（参考 D05 3.4 + D04 4.3 状态机）."""
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -18,9 +18,12 @@ class WarningOut(BaseModel):
     id: UUID
     employee_id: UUID
     prediction_id: Optional[UUID] = None
-    level: str = Field(description="等级：P0/P1/P2")
+    level: Literal[LEVEL_P0, LEVEL_P1, LEVEL_P2] = Field(description="等级：P0/P1/P2")
     risk_score: int
-    status: str = Field(description="状态机当前态")
+    status: Literal[
+        STATUS_NEW, STATUS_CONFIRMED, STATUS_REVIEW,
+        STATUS_FIXING, STATUS_APPEALING, STATUS_CLOSED,
+    ] = Field(description="状态机当前态")
     assigned_to: Optional[UUID] = None
     escalated_to: Optional[UUID] = None
     message: Optional[str] = None
@@ -38,16 +41,22 @@ class WarningStatusUpdate(BaseModel):
     转换合法性由 WarningService.transition 校验，非法转换抛 ValueError。
     """
 
-    target_status: str = Field(
+    target_status: Literal[
+        STATUS_NEW, STATUS_CONFIRMED, STATUS_REVIEW,
+        STATUS_FIXING, STATUS_APPEALING, STATUS_CLOSED,
+    ] = Field(
         description="目标状态：confirmed/review/fixing/appealing/closed"
     )
     comment: Optional[str] = Field(default=None, description="备注")
-    operator_id: UUID = Field(description="操作人 ID")
-    intervention_type: Optional[str] = Field(
+    operator_id: Optional[UUID] = Field(
+        default=None,
+        description="已弃用：操作人由服务端从认证 token 派生，客户端无需提供",
+    )
+    intervention_type: Optional[Literal["raise", "transfer", "training", "coaching", "other"]] = Field(
         default=None, description="干预类型（fixing 时使用）：raise/transfer/training/coaching/other"
     )
     intervention_description: Optional[str] = None
-    appeal_reason: Optional[str] = Field(
+    appeal_reason: Optional[Literal["false_alarm", "outdated", "inaccurate", "misleading"]] = Field(
         default=None, description="申诉理由：false_alarm/outdated/inaccurate/misleading"
     )
     appeal_description: Optional[str] = None
@@ -77,8 +86,15 @@ class PaginatedWarnings(BaseModel):
 class AppealRequest(BaseModel):
     """发起申诉请求（POST /warnings/{id}/appeal）."""
 
-    reason: str = Field(description="申诉理由：false_alarm/outdated/inaccurate/misleading 或自定义文本")
-    operator_id: UUID = Field(description="操作人 ID（员工或 HR）")
+    reason: str = Field(
+        min_length=2,
+        max_length=200,
+        description="申诉理由：false_alarm/outdated/inaccurate/misleading 或自定义文本",
+    )
+    operator_id: Optional[UUID] = Field(
+        default=None,
+        description="已弃用：操作人由服务端从认证 token 派生，客户端无需提供",
+    )
     description: Optional[str] = Field(default=None, description="申诉补充说明")
 
 
@@ -91,9 +107,14 @@ class MarkRequest(BaseModel):
       - communicated：已沟通
     """
 
-    mark_type: str = Field(description="标记类型：false_positive / watching / communicated")
+    mark_type: Literal["false_positive", "watching", "communicated"] = Field(
+        description="标记类型：false_positive / watching / communicated"
+    )
     comment: Optional[str] = Field(default=None, description="备注")
-    operator_id: UUID = Field(description="操作人 ID（HR）")
+    operator_id: Optional[UUID] = Field(
+        default=None,
+        description="已弃用：操作人由服务端从认证 token 派生，客户端无需提供",
+    )
 
 
 # 合法 mark_type 枚举

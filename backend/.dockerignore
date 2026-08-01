@@ -1,0 +1,16 @@
+# 后端构建上下文忽略（P1-8）
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+*.db
+*.log
+.env
+tests
+alembic
+data
+docs

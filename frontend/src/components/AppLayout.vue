@@ -1,22 +1,29 @@
 <script setup lang="ts">
 // 应用布局 - 左侧导航 + 顶部用户栏 + 主内容区
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { RouterView, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
 
-const menu = [
-  { path: '/dashboard', label: '仪表盘', icon: '📊' },
-  { path: '/employees', label: '员工', icon: '👥' },
-  { path: '/risk', label: '风险预测', icon: '⚠️' },
-  { path: '/warnings', label: '预警', icon: '🚨' },
-  { path: '/advise', label: '保留建议', icon: '🤖' },
-  { path: '/governance', label: '治理', icon: '⚙️' },
+// 菜单按角色过滤（治理页仅管理员，保留建议仅 HR 角色）
+const allMenu = [
+  { path: '/dashboard', label: '仪表盘', icon: '📊', roles: null as string[] | null },
+  { path: '/employees', label: '员工', icon: '👥', roles: null },
+  { path: '/risk', label: '风险预测', icon: '⚠️', roles: null },
+  { path: '/warnings', label: '预警', icon: '🚨', roles: null },
+  { path: '/advise', label: '保留建议', icon: '🤖', roles: ['admin', 'hr_manager', 'hrbp'] },
+  { path: '/governance', label: '治理', icon: '⚙️', roles: ['admin'] },
 ]
 
-const collapsed = ref(false)
+const menu = computed(() => {
+  const role = auth.user?.role
+  if (!role) return []
+  return allMenu.filter((m) => !m.roles || m.roles.includes(role))
+})
+
+const collapsed = ref(localStorage.getItem('hra_sidebar_collapsed') === '1')
 const isNarrow = ref(false)
 
 function handleResize() {
@@ -34,6 +41,7 @@ onUnmounted(() => {
 
 function toggleSidebar() {
   collapsed.value = !collapsed.value
+  localStorage.setItem('hra_sidebar_collapsed', collapsed.value ? '1' : '0')
 }
 
 function handleLogout() {
@@ -45,20 +53,26 @@ function roleLabel(role: string) {
   const map: Record<string, string> = {
     admin: '系统管理员',
     hr_manager: 'HR 经理',
-    hr_bp: 'HR BP',
-    predict_model: '模型工程师',
-    exec: '高管',
+    hrbp: 'HR BP',
+    manager: '直线经理',
+    employee: '员工',
   }
   return map[role] || role
 }
 </script>
 
 <template>
-  <div class="layout" :class="{ collapsed }">
+  <div
+    class="layout"
+    :class="{ collapsed }"
+  >
     <aside class="sidebar">
       <div class="logo">
         <span class="logo-icon">🎯</span>
-        <span v-if="!collapsed" class="logo-text">HRA 离职风险预警</span>
+        <span
+          v-if="!collapsed"
+          class="logo-text"
+        >HRA 离职风险预警</span>
       </div>
       <nav>
         <RouterLink
@@ -69,24 +83,41 @@ function roleLabel(role: string) {
           :title="item.label"
         >
           <span class="icon">{{ item.icon }}</span>
-          <span v-if="!collapsed" class="label">{{ item.label }}</span>
+          <span
+            v-if="!collapsed"
+            class="label"
+          >{{ item.label }}</span>
         </RouterLink>
       </nav>
     </aside>
     <main class="main">
       <header class="header">
         <div class="header-left">
-          <button class="toggle-btn secondary" @click="toggleSidebar" :title="collapsed ? '展开' : '收起'">
+          <button
+            class="toggle-btn secondary"
+            :title="collapsed ? '展开' : '收起'"
+            @click="toggleSidebar"
+          >
             {{ collapsed ? '☰' : '✕' }}
           </button>
-          <div class="header-title">企业员工离职风险与人才流失预警系统</div>
+          <div class="header-title">
+            企业员工离职风险与人才流失预警系统
+          </div>
         </div>
         <div class="header-user">
-          <span v-if="auth.user" class="user-info">
+          <span
+            v-if="auth.user"
+            class="user-info"
+          >
             <span class="user-name">{{ auth.user.name }}</span>
             <span class="user-role">{{ roleLabel(auth.user.role) }}</span>
           </span>
-          <button class="secondary" @click="handleLogout">退出</button>
+          <button
+            class="secondary"
+            @click="handleLogout"
+          >
+            退出
+          </button>
         </div>
       </header>
       <div class="content">

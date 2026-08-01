@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     # ===== 应用 =====
     APP_ENV: str = "development"
     LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "text"  # text | json（生产建议 json，便于采集）
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
     # ===== 数据库 =====

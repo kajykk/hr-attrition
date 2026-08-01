@@ -1,8 +1,11 @@
 <script setup lang="ts">
 // 模型治理视图 - Kill Switch + 漂移检测 + 公平性监测 + 模型版本
 import { ref, computed, onMounted } from 'vue'
-import { apiClient } from '@/api/client'
+import { apiClient, extractApiError } from '@/api/client'
 import type { KillSwitchStatus, DriftResult, FairnessResult } from '@/api/types'
+
+// 演示数据仅在开发环境允许；生产环境失败必须展示真实错误
+const allowDemo = import.meta.env.DEV
 
 const killSwitch = ref<KillSwitchStatus>({ active: false })
 const drift = ref<DriftResult | null>(null)
@@ -44,45 +47,34 @@ function driftColor(psi: number) {
 async function loadAll() {
   loading.value = true
   errorMsg.value = ''
-  let anySuccess = false
-  await Promise.all([
-    apiClient
-      .get<KillSwitchStatus>('/api/v1/admin/kill-switch')
-      .then(({ data }) => {
-        killSwitch.value = data
-        anySuccess = true
-      })
-      .catch(() => {}),
-    apiClient
-      .get<{ model_version: string }>('/api/v1/risk/global-explanation', { params: { window_days: 30 } })
-      .then(({ data }) => {
-        modelVersion.value = data.model_version
-        anySuccess = true
-      })
-      .catch(() => {}),
-    // 漂移 & 公平性接口（后端如有则对接，无则演示）
-    apiClient
-      .get<DriftResult>('/api/v1/admin/drift')
-      .then(({ data }) => {
-        drift.value = data
-        anySuccess = true
-      })
-      .catch(() => {}),
-    apiClient
-      .get<FairnessResult>('/api/v1/admin/fairness')
-      .then(({ data }) => {
-        fairness.value = data
-        anySuccess = true
-      })
-      .catch(() => {}),
+  const failures: string[] = []
+  const results = await Promise.allSettled([
+    apiClient.get<KillSwitchStatus>('/api/v1/admin/kill-switch'),
+    apiClient.get<{ model_version: string }>('/api/v1/risk/global-explanation', {
+      params: { window_days: 30 },
+    }),
+    // 漂移 & 公平性接口（后端如有则对接，无则跳过）
+    apiClient.get<DriftResult>('/api/v1/admin/drift'),
+    apiClient.get<FairnessResult>('/api/v1/admin/fairness'),
   ])
-  if (!anySuccess) {
-    errorMsg.value = '后端 API 不可用，已切换到演示模式（占位数据）'
+  const ok = (r: PromiseSettledResult<unknown>) => r.status === 'fulfilled'
+  const failedIndexes = results.map((r, i) => (ok(r) ? -1 : i)).filter((i) => i >= 0)
+
+  if (ok(results[0])) killSwitch.value = (results[0] as PromiseFulfilledResult<{ data: KillSwitchStatus }>).value.data
+  else failures.push('Kill Switch 状态')
+  if (ok(results[1])) modelVersion.value = (results[1] as PromiseFulfilledResult<{ data: { model_version: string } }>).value.data.model_version
+  else failures.push('模型版本')
+  if (ok(results[2])) drift.value = (results[2] as PromiseFulfilledResult<{ data: DriftResult }>).value.data
+  if (ok(results[3])) fairness.value = (results[3] as PromiseFulfilledResult<{ data: FairnessResult }>).value.data
+
+  if (failedIndexes.length > 0) {
+    errorMsg.value = `部分数据加载失败：${failures.join('、')}`
   }
-  // 任意失败填演示数据
-  if (!drift.value) fillDemoDrift()
-  if (!fairness.value) fillDemoFairness()
-  if (modelVersion.value === '-') modelVersion.value = 'fusion-v3.2'
+  // 演示数据仅限开发环境
+  if (allowDemo) {
+    if (!drift.value) fillDemoDrift()
+    if (!fairness.value) fillDemoFairness()
+  }
   loading.value = false
 }
 
@@ -144,19 +136,11 @@ async function submitKs() {
     const body =
       ksModal.value.action === 'activate' ? { reason: ksModal.value.reason } : {}
     const { data } = await apiClient.post<KillSwitchStatus>(url, body)
+    // 成功状态一律以后端响应为准（绝不本地模拟）
     killSwitch.value = data
     closeKsModal()
   } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string } } }
-    ksMsg.value = err?.response?.data?.detail || '操作失败'
-    // 演示模式：本地切换
-    killSwitch.value = {
-      active: ksModal.value.action === 'activate',
-      reason: ksModal.value.action === 'activate' ? ksModal.value.reason : null,
-      activated_at: ksModal.value.action === 'activate' ? new Date().toISOString() : null,
-      activated_by: 'demo-admin',
-    }
-    closeKsModal()
+    ksMsg.value = extractApiError(e, '操作失败')
   } finally {
     ksLoading.value = false
   }
@@ -176,26 +160,52 @@ onMounted(loadAll)
 
 <template>
   <div class="page">
-    <h2 class="page-title">模型治理</h2>
-    <p class="page-desc">Kill Switch + 漂移检测 + 公平性监测 + 模型版本（D03 4.5 + D05 3.6）</p>
+    <h2 class="page-title">
+      模型治理
+    </h2>
+    <p class="page-desc">
+      Kill Switch + 漂移检测 + 公平性监测 + 模型版本（D03 4.5 + D05 3.6）
+    </p>
 
-    <div v-if="errorMsg" class="banner warning">⚠ {{ errorMsg }}</div>
+    <div
+      v-if="errorMsg"
+      class="banner warning"
+    >
+      ⚠ {{ errorMsg }}
+    </div>
 
     <!-- Kill Switch 横幅 -->
-    <div v-if="killSwitch.active" class="banner danger">
+    <div
+      v-if="killSwitch.active"
+      class="banner danger"
+    >
       <span>🚫 Kill Switch 已激活：{{ killSwitch.reason || '未提供原因' }}</span>
-      <span v-if="killSwitch.activated_at" style="margin-left:auto; font-size:12px;">
+      <span
+        v-if="killSwitch.activated_at"
+        style="margin-left:auto; font-size:12px;"
+      >
         激活时间：{{ fmtTime(killSwitch.activated_at) }} | 操作人：{{ killSwitch.activated_by || '-' }}
       </span>
     </div>
 
     <!-- Kill Switch 面板 -->
-    <div class="card ks-card" :class="{ active: killSwitch.active }">
-      <h3 class="card-title">Kill Switch（模型熔断）</h3>
+    <div
+      class="card ks-card"
+      :class="{ active: killSwitch.active }"
+    >
+      <h3 class="card-title">
+        Kill Switch（模型熔断）
+      </h3>
       <div class="ks-status">
-        <div class="ks-light" :class="killSwitch.active ? 'on' : 'off'"></div>
+        <div
+          class="ks-light"
+          :class="killSwitch.active ? 'on' : 'off'"
+        />
         <div>
-          <div class="ks-state" :class="killSwitch.active ? 'risk-high' : 'risk-low'">
+          <div
+            class="ks-state"
+            :class="killSwitch.active ? 'risk-high' : 'risk-low'"
+          >
             {{ killSwitch.active ? '已激活（模型停服）' : '未激活（正常服务）' }}
           </div>
           <div class="ks-meta">
@@ -209,21 +219,42 @@ onMounted(loadAll)
         </div>
       </div>
       <div class="ks-actions">
-        <button v-if="!killSwitch.active" class="danger-btn" @click="openKsModal('activate')">
+        <button
+          v-if="!killSwitch.active"
+          class="danger-btn"
+          @click="openKsModal('activate')"
+        >
           激活 Kill Switch
         </button>
-        <button v-else class="success-btn" @click="openKsModal('deactivate')">
+        <button
+          v-else
+          class="success-btn"
+          @click="openKsModal('deactivate')"
+        >
           解除 Kill Switch
         </button>
-        <button class="secondary" @click="loadAll" :disabled="loading">刷新状态</button>
+        <button
+          class="secondary"
+          :disabled="loading"
+          @click="loadAll"
+        >
+          刷新状态
+        </button>
       </div>
     </div>
 
     <div class="grid-2">
       <!-- 漂移检测面板 -->
       <div class="card">
-        <h3 class="card-title">漂移检测（PSI）</h3>
-        <div v-if="!drift" class="empty">暂无漂移数据</div>
+        <h3 class="card-title">
+          漂移检测（PSI）
+        </h3>
+        <div
+          v-if="!drift"
+          class="empty"
+        >
+          暂无漂移数据
+        </div>
         <div v-else>
           <div class="drift-summary">
             <div>
@@ -242,64 +273,123 @@ onMounted(loadAll)
             </div>
           </div>
           <div class="drift-chart">
-            <div v-for="f in drift.features" :key="f.feature" class="drift-row">
-              <div class="drift-name">{{ f.feature }}</div>
+            <div
+              v-for="f in drift.features"
+              :key="f.feature"
+              class="drift-row"
+            >
+              <div class="drift-name">
+                {{ f.feature }}
+              </div>
               <div class="drift-bar-bg">
                 <!-- 阈值线 0.1 / 0.2 -->
-                <div class="threshold-line warn" :style="{ left: (0.1 / driftMax) * 100 + '%' }"></div>
-                <div class="threshold-line crit" :style="{ left: (0.2 / driftMax) * 100 + '%' }"></div>
+                <div
+                  class="threshold-line warn"
+                  :style="{ left: (0.1 / driftMax) * 100 + '%' }"
+                />
+                <div
+                  class="threshold-line crit"
+                  :style="{ left: (0.2 / driftMax) * 100 + '%' }"
+                />
                 <div
                   class="drift-bar"
                   :style="{ width: (f.psi / driftMax) * 100 + '%', background: driftColor(f.psi) }"
-                ></div>
+                />
               </div>
-              <div class="drift-value" :style="{ color: driftColor(f.psi) }">{{ f.psi.toFixed(3) }}</div>
+              <div
+                class="drift-value"
+                :style="{ color: driftColor(f.psi) }"
+              >
+                {{ f.psi.toFixed(3) }}
+              </div>
             </div>
           </div>
           <div class="legend">
-            <span><span class="legend-dot" style="background:var(--risk-low)"></span>正常 (&lt;0.1)</span>
-            <span><span class="legend-dot" style="background:var(--risk-medium)"></span>警告 (0.1-0.2)</span>
-            <span><span class="legend-dot" style="background:var(--risk-high)"></span>严重 (&gt;0.2)</span>
+            <span><span
+              class="legend-dot"
+              style="background:var(--risk-low)"
+            />正常 (&lt;0.1)</span>
+            <span><span
+              class="legend-dot"
+              style="background:var(--risk-medium)"
+            />警告 (0.1-0.2)</span>
+            <span><span
+              class="legend-dot"
+              style="background:var(--risk-high)"
+            />严重 (&gt;0.2)</span>
           </div>
         </div>
       </div>
 
       <!-- 公平性面板 -->
       <div class="card">
-        <h3 class="card-title">公平性监测（偏差%）</h3>
-        <div v-if="!fairness" class="empty">暂无公平性数据</div>
+        <h3 class="card-title">
+          公平性监测（偏差%）
+        </h3>
+        <div
+          v-if="!fairness"
+          class="empty"
+        >
+          暂无公平性数据
+        </div>
         <div v-else>
           <div class="fairness-summary">
             <span class="d-label">检测时间：</span>{{ fmtTime(fairness.computed_at) }}
           </div>
           <div class="fairness-chart">
-            <div v-for="d in fairness.dimensions" :key="d.name" class="fairness-row">
-              <div class="fairness-name">{{ d.label }}</div>
+            <div
+              v-for="d in fairness.dimensions"
+              :key="d.name"
+              class="fairness-row"
+            >
+              <div class="fairness-name">
+                {{ d.label }}
+              </div>
               <div class="fairness-bar-bg">
                 <!-- 5% 阈值线 -->
-                <div class="threshold-line warn" :style="{ left: (fairnessThreshold / 10) * 100 + '%' }"></div>
+                <div
+                  class="threshold-line warn"
+                  :style="{ left: (fairnessThreshold / 10) * 100 + '%' }"
+                />
                 <div
                   class="fairness-bar"
                   :style="{ width: (d.disparity / 10) * 100 + '%', background: fairnessColor(d.disparity) }"
-                ></div>
+                />
               </div>
-              <div class="fairness-value" :style="{ color: fairnessColor(d.disparity) }">
+              <div
+                class="fairness-value"
+                :style="{ color: fairnessColor(d.disparity) }"
+              >
                 {{ d.disparity.toFixed(1) }}%
               </div>
             </div>
           </div>
           <div class="legend">
-            <span><span class="legend-dot" style="background:var(--risk-low)"></span>正常 (&lt;5%)</span>
-            <span><span class="legend-dot" style="background:var(--risk-medium)"></span>警告 (5-8%)</span>
-            <span><span class="legend-dot" style="background:var(--risk-high)"></span>严重 (&gt;8%)</span>
+            <span><span
+              class="legend-dot"
+              style="background:var(--risk-low)"
+            />正常 (&lt;5%)</span>
+            <span><span
+              class="legend-dot"
+              style="background:var(--risk-medium)"
+            />警告 (5-8%)</span>
+            <span><span
+              class="legend-dot"
+              style="background:var(--risk-high)"
+            />严重 (&gt;8%)</span>
           </div>
         </div>
       </div>
     </div>
 
     <!-- 模型版本信息 -->
-    <div class="card" style="margin-top:16px;">
-      <h3 class="card-title">模型版本信息</h3>
+    <div
+      class="card"
+      style="margin-top:16px;"
+    >
+      <h3 class="card-title">
+        模型版本信息
+      </h3>
       <div class="version-grid">
         <div><span class="d-label">当前版本：</span><strong>{{ modelVersion }}</strong></div>
         <div><span class="d-label">发布策略：</span>金丝雀（100% 流量）</div>
@@ -309,28 +399,55 @@ onMounted(loadAll)
     </div>
 
     <!-- Kill Switch 操作弹框 -->
-    <div v-if="ksModal.open" class="modal-mask" @click.self="closeKsModal">
+    <div
+      v-if="ksModal.open"
+      class="modal-mask"
+      @click.self="closeKsModal"
+    >
       <div class="modal">
         <div class="modal-title">
           {{ ksModal.action === 'activate' ? '激活 Kill Switch' : '解除 Kill Switch' }}
         </div>
         <div class="modal-body">
-          <p v-if="ksModal.action === 'activate'" class="warn-text">
+          <p
+            v-if="ksModal.action === 'activate'"
+            class="warn-text"
+          >
             ⚠ 激活后模型将停止对外提供预测服务，所有 /risk/predict 请求将被拒绝。请谨慎操作。
           </p>
-          <div v-if="ksModal.action === 'activate'" class="form-item">
+          <div
+            v-if="ksModal.action === 'activate'"
+            class="form-item"
+          >
             <label>激活原因 <span class="required">*</span></label>
-            <textarea v-model="ksModal.reason" rows="3" placeholder="请填写激活原因（如：模型严重漂移、公平性超标等）"></textarea>
+            <textarea
+              v-model="ksModal.reason"
+              rows="3"
+              placeholder="请填写激活原因（如：模型严重漂移、公平性超标等）"
+            />
           </div>
-          <p v-else>确认解除 Kill Switch？解除后模型将恢复对外服务。</p>
-          <p v-if="ksMsg" class="action-error">{{ ksMsg }}</p>
+          <p v-else>
+            确认解除 Kill Switch？解除后模型将恢复对外服务。
+          </p>
+          <p
+            v-if="ksMsg"
+            class="action-error"
+          >
+            {{ ksMsg }}
+          </p>
         </div>
         <div class="modal-foot">
-          <button class="secondary" @click="closeKsModal" :disabled="ksLoading">取消</button>
+          <button
+            class="secondary"
+            :disabled="ksLoading"
+            @click="closeKsModal"
+          >
+            取消
+          </button>
           <button
             :class="ksModal.action === 'activate' ? 'danger-btn' : 'success-btn'"
-            @click="submitKs"
             :disabled="ksLoading"
+            @click="submitKs"
           >
             {{ ksLoading ? '提交中...' : '确认' }}
           </button>

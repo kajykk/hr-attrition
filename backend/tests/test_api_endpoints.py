@@ -32,11 +32,11 @@ async def _fake_async_gen_yield_none():
 
 
 def test_health_returns_200_and_healthy(client):
-    """GET /health 应返回 200 与 status=healthy."""
+    """GET /health 应返回 200 与 status=healthy（或依赖缺失时 degraded）."""
     resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "healthy"
+    assert body["status"] in ("healthy", "degraded")
     assert "components" in body
     assert "version" in body
 
@@ -300,6 +300,146 @@ def test_refresh_with_invalid_token_returns_401(client):
         json={"refresh_token": "invalid.token.here"},
     )
     assert resp.status_code == 401
+
+
+# ============================================================
+# 7. 登录限流（P1-6）
+# ============================================================
+
+
+def test_login_rate_limit_returns_429(client):
+    """连续超过 RATE_LIMIT_LOGIN 次登录应返回 429（按 IP 计数）. """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.core.rate_limit import limiter
+    from app.db.session import get_db
+    from app.main import app
+
+    # 覆盖 get_db：用户不存在（401），避免连真实 PostgreSQL
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    db_mock = AsyncMock()
+    db_mock.execute = AsyncMock(return_value=result_mock)
+
+    async def _fake_get_db():
+        yield db_mock
+
+    app.dependency_overrides[get_db] = _fake_get_db
+    try:
+        limiter.reset()
+        responses = []
+        # 默认 5/minute，打 6 次
+        for _ in range(6):
+            responses.append(
+                client.post(
+                    "/api/v1/auth/login",
+                    json={"email": "nobody@example.com", "password": "x"},
+                )
+            )
+        assert responses[5].status_code == 429
+        assert responses[5].headers.get("retry-after")
+    finally:
+        limiter.reset()
+        app.dependency_overrides.clear()
+
+
+# ============================================================
+# 8. 登录失败审计（P2-10 回归：失败路径必须落库，冒烟发现回滚缺陷）
+# ============================================================
+
+
+def _fake_user(role="admin", totp_secret=None):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.core.security import hash_password
+
+    return SimpleNamespace(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        role=role,
+        status="active",
+        totp_secret=totp_secret,
+        password_hash=hash_password("correct-password"),
+    )
+
+
+def test_login_failure_writes_audit_log(client, monkeypatch):
+    """错误密码登录必须写 auth.login_failed 审计（commit=True 防回滚丢失）. """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.db.session import get_db
+    from app.main import app
+
+    calls: list[dict] = []
+
+    async def fake_append_audit_log(**kwargs):
+        calls.append(kwargs)
+
+    import app.api.v1.auth as auth_mod
+
+    monkeypatch.setattr(auth_mod, "append_audit_log", fake_append_audit_log)
+
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = _fake_user()
+    db_mock = AsyncMock()
+    db_mock.execute = AsyncMock(return_value=result_mock)
+    db_mock.commit = AsyncMock()
+
+    async def _fake_get_db():
+        yield db_mock
+
+    app.dependency_overrides[get_db] = _fake_get_db
+    try:
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "wrong-password"},
+        )
+        assert resp.status_code == 401
+        assert any(c.get("action") == "auth.login_failed" for c in calls)
+        assert any(c.get("after_value") == {"reason": "bad_credentials"} for c in calls)
+        # commit=True：显式提交，防止 get_db 在 401 抛异常时 rollback
+        assert db_mock.commit.await_count >= 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_invalid_totp_writes_audit_log(client, monkeypatch):
+    """2FA 校验失败必须写 auth.login_failed（reason=invalid_totp）审计. """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.db.session import get_db
+    from app.main import app
+
+    calls: list[dict] = []
+
+    async def fake_append_audit_log(**kwargs):
+        calls.append(kwargs)
+
+    import app.api.v1.auth as auth_mod
+
+    monkeypatch.setattr(auth_mod, "append_audit_log", fake_append_audit_log)
+
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = _fake_user(totp_secret="BASE32SECRET1234567890")
+    db_mock = AsyncMock()
+    db_mock.execute = AsyncMock(return_value=result_mock)
+    db_mock.commit = AsyncMock()
+
+    async def _fake_get_db():
+        yield db_mock
+
+    app.dependency_overrides[get_db] = _fake_get_db
+    try:
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "correct-password", "totp_code": "000000"},
+        )
+        assert resp.status_code == 401
+        assert any(c.get("action") == "auth.login_failed" and
+                   c.get("after_value") == {"reason": "invalid_totp"} for c in calls)
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_refresh_with_missing_field_returns_422(client):

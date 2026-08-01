@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -38,10 +39,55 @@ MODEL_VERSION = "fusion-engine-v1"
 _CACHE_KEY_TPL = "risk:{tenant_id}:{employee_id}"
 _CACHE_TTL_SECONDS = 3600
 
+# 全局解释聚合上限（防全表加载，超量取最近 N 条）
+_GLOBAL_EXPLAIN_MAX_RECORDS = 20000
+
 
 # ===== 模块级懒加载单例（避免每次请求加载模型） =====
 _fusion_engine = None
 _shap_explainer = None
+
+
+def _aggregate_feature_contributions(
+    feature_values_rows: list,
+    default_top_features: list[dict],
+) -> list[dict]:
+    """同步聚合函数：从 feature_values 行计算 Top10 特征贡献度代理（标准差）.
+
+    设计为普通同步函数，由 asyncio.to_thread 调用，避免在事件循环中做
+    numpy 聚合（P1-7 优化）。direction 用均值相对中位数的偏移判断。
+    """
+    import numpy as np
+
+    feat_values: dict[str, list[float]] = {}
+    for fv in feature_values_rows:
+        if not fv:
+            continue
+        for k, v in fv.items():
+            try:
+                feat_values.setdefault(k, []).append(float(v))
+            except (TypeError, ValueError):
+                continue
+
+    contributions: list[dict] = []
+    for feat, vals in feat_values.items():
+        if len(vals) < 2:
+            continue
+        arr = np.array(vals)
+        std = float(arr.std())
+        mean = float(arr.mean())
+        median = float(np.median(arr))
+        # 方向：均值高于中位数 → positive，否则 negative
+        direction = "positive" if mean > median else "negative"
+        contributions.append({
+            "feature": feat,
+            "display_name": _FEATURE_DISPLAY_NAMES.get(feat, feat),
+            "contribution": std,
+            "direction": direction,
+        })
+
+    contributions.sort(key=lambda x: abs(x["contribution"]), reverse=True)
+    return contributions[:10] if contributions else default_top_features
 
 
 def _get_fusion_engine():
@@ -184,11 +230,12 @@ class RiskService:
         if employee is None:
             raise ValueError(f"员工不存在或跨租户访问 | employee_id={employee_id}")
 
-        # 3. 构造特征
-        from app.ml.feature_provider import build_features
+        # 3. 构造特征（先校验训练/推理特征契约，防漂移）
+        from app.ml.feature_provider import assert_feature_contract, build_features
+        assert_feature_contract()
         structured_df, behavior_df = build_features(employee)
 
-        # 4. 调用 FusionEngine 预测（加载失败降级为占位）
+        # 4. 调用 FusionEngine 预测（CPU 密集 → to_thread，避免阻塞事件循环；失败降级为占位）
         engine = _get_fusion_engine()
         if engine is None:
             logger.warning("FusionEngine 不可用，返回占位预测 | employee_id=%s", employee_id)
@@ -196,7 +243,7 @@ class RiskService:
             modality_scores = {"structured": 0.5, "behavior": 0.5}
         else:
             try:
-                pred = engine.predict(structured_df, behavior_df)
+                pred = await asyncio.to_thread(engine.predict, structured_df, behavior_df)
                 risk_score = int(pred["risk_score"])
                 modality_scores = pred["modality_scores"]
             except Exception as e:  # noqa: BLE001
@@ -207,32 +254,28 @@ class RiskService:
         risk_level = cls.score_to_level(risk_score)
         now = datetime.now(timezone.utc)
 
-        # 5. 写入 risk_predictions 表
+        # 5. 写入 risk_predictions 表（写失败直接抛出，由 API 层返回 500；不再静默吞掉）
         feature_values = {col: float(structured_df.iloc[0][col]) for col in structured_df.columns}
-        prediction_id = None
-        try:
-            record = RiskPrediction(
-                tenant_id=tenant_id,
-                employee_id=employee_id,
-                model_version=cls.MODEL_VERSION,
-                risk_score=risk_score,
-                risk_level=risk_level,
-                modality_scores=modality_scores,
-                feature_values=feature_values,
-                predicted_at=now,
-            )
-            db.add(record)
-            await db.flush()
-            prediction_id = record.id
-        except Exception as e:  # noqa: BLE001
-            logger.error("写入 risk_predictions 失败 | err=%s", e)
+        record = RiskPrediction(
+            tenant_id=tenant_id,
+            employee_id=employee_id,
+            model_version=cls.MODEL_VERSION,
+            risk_score=risk_score,
+            risk_level=risk_level,
+            modality_scores=modality_scores,
+            feature_values=feature_values,
+            predicted_at=now,
+        )
+        db.add(record)
+        await db.flush()
+        prediction_id = record.id
 
-        # 6. 同步触发 SHAP（D03 ADR-004 解耦后续优化）
+        # 6. 同步触发 SHAP（CPU 密集 → to_thread；D03 ADR-004 解耦后续优化）
         shap_factors: list[dict] = []
         explainer = _get_shap_explainer()
         if explainer is not None:
             try:
-                shap_factors = explainer.explain(structured_df, top_k=3)
+                shap_factors = await asyncio.to_thread(explainer.explain, structured_df, top_k=3)
             except Exception as e:  # noqa: BLE001
                 logger.warning("SHAP 计算失败 | employee_id=%s | err=%s", employee_id, e)
 
@@ -313,14 +356,16 @@ class RiskService:
 
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-            stmt = select(RiskPrediction).where(
+            # 只取 feature_values 列 + 限制聚合行数（避免全表加载大 JSONB）
+            stmt = select(RiskPrediction.feature_values).where(
                 RiskPrediction.tenant_id == tenant_id,
                 RiskPrediction.predicted_at >= cutoff,
-            )
-            result = await db.execute(stmt)
-            records = result.scalars().all()
+            ).order_by(
+                RiskPrediction.predicted_at.desc()
+            ).limit(_GLOBAL_EXPLAIN_MAX_RECORDS)
+            rows = (await db.execute(stmt)).scalars().all()
 
-            if not records:
+            if not rows:
                 return {
                     "model_version": cls.MODEL_VERSION,
                     "window_days": window_days,
@@ -328,37 +373,12 @@ class RiskService:
                     "computed_at": datetime.now(timezone.utc).isoformat(),
                 }
 
-            # 聚合特征值，计算每个特征的 |贡献度| 代理（用值的标准差作为代理）
-            import numpy as np
-            feat_values: dict[str, list[float]] = {}
-            for r in records:
-                fv = r.feature_values or {}
-                for k, v in fv.items():
-                    try:
-                        feat_values.setdefault(k, []).append(float(v))
-                    except (TypeError, ValueError):
-                        continue
-
-            # 计算每个特征的标准差（贡献度代理：方差越大对模型影响越大）
-            contributions = []
-            for feat, vals in feat_values.items():
-                if len(vals) < 2:
-                    continue
-                arr = np.array(vals)
-                std = float(arr.std())
-                mean = float(arr.mean())
-                # 方向：均值高于中位数 → positive，否则 negative
-                direction = "positive" if mean > arr.mean() else "negative"
-                contributions.append({
-                    "feature": feat,
-                    "display_name": _FEATURE_DISPLAY_NAMES.get(feat, feat),
-                    "contribution": std,
-                    "direction": direction,
-                })
-
-            # 取 Top10（按 |contribution| 降序）
-            contributions.sort(key=lambda x: abs(x["contribution"]), reverse=True)
-            top_features = contributions[:10] if contributions else default_top_features
+            # CPU 密集聚合 → to_thread（避免阻塞事件循环）
+            top_features = await asyncio.to_thread(
+                _aggregate_feature_contributions,
+                [r for r in rows],
+                default_top_features,
+            )
 
             return {
                 "model_version": cls.MODEL_VERSION,

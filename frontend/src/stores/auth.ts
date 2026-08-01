@@ -2,8 +2,15 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { apiClient } from '@/api/client'
+import {
+  clearAuthStorage,
+  getAccessToken,
+  getRefreshToken,
+  getStoredUser,
+  setAuthStorage,
+} from '@/api/auth-keys'
 
-interface UserInfo {
+export interface UserInfo {
   id: string
   name: string
   role: string
@@ -12,11 +19,9 @@ interface UserInfo {
 }
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string>(localStorage.getItem('hra_token') || '')
-  const refreshToken = ref<string>(localStorage.getItem('hra_refresh_token') || '')
-  const user = ref<UserInfo | null>(
-    JSON.parse(localStorage.getItem('hra_user') || 'null')
-  )
+  const token = ref<string>(getAccessToken())
+  const refreshToken = ref<string>(getRefreshToken())
+  const user = ref<UserInfo | null>(getStoredUser<UserInfo>())
 
   const isLoggedIn = computed(() => !!token.value)
 
@@ -24,13 +29,15 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = accessToken
     refreshToken.value = refresh
     user.value = userInfo
-    localStorage.setItem('hra_token', accessToken)
-    localStorage.setItem('hra_refresh_token', refresh)
-    localStorage.setItem('hra_user', JSON.stringify(userInfo))
+    setAuthStorage(accessToken, refresh, userInfo)
   }
 
   async function login(email: string, password: string, totpCode?: string) {
-    const { data } = await apiClient.post('/api/v1/auth/login', {
+    const { data } = await apiClient.post<{
+      access_token: string
+      refresh_token: string
+      user: UserInfo
+    }>('/api/v1/auth/login', {
       email,
       password,
       totp_code: totpCode,
@@ -43,9 +50,7 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = ''
     refreshToken.value = ''
     user.value = null
-    localStorage.removeItem('hra_token')
-    localStorage.removeItem('hra_refresh_token')
-    localStorage.removeItem('hra_user')
+    clearAuthStorage()
   }
 
   return { token, refreshToken, user, isLoggedIn, setAuth, login, logout }

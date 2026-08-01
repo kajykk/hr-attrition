@@ -8,11 +8,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import require_role
 from app.core import kill_switch
 from app.core.logging import get_logger
 from app.db.session import get_db
-from app.models.user import User
+from app.models.user import ROLE_ADMIN, User
 from app.schemas.admin import KillSwitchAction, KillSwitchStatus
 from app.services.audit_service import append_audit_log
 
@@ -23,9 +23,9 @@ router = APIRouter()
 
 @router.get("/kill-switch", response_model=KillSwitchStatus)
 async def get_kill_switch_status(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(ROLE_ADMIN)),
 ):
-    """查询 Kill Switch 当前状态（D03 4.5）."""
+    """查询 Kill Switch 当前状态（D03 4.5，仅管理员）."""
     status_dict = await kill_switch.get_status_async()
     return KillSwitchStatus(**status_dict)
 
@@ -34,7 +34,7 @@ async def get_kill_switch_status(
 async def activate_kill_switch(
     payload: KillSwitchAction,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(ROLE_ADMIN)),
 ):
     """激活 Kill Switch（写审计日志）.
 
@@ -68,7 +68,7 @@ async def activate_kill_switch(
 @router.post("/kill-switch/deactivate", response_model=KillSwitchStatus)
 async def deactivate_kill_switch(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(ROLE_ADMIN)),
 ):
     """解除 Kill Switch（写审计日志）."""
     await kill_switch.deactivate_async(operator_id=str(user.id))

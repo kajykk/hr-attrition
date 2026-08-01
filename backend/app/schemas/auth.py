@@ -3,13 +3,23 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
     totp_code: Optional[str] = Field(default=None, max_length=6, description="2FA 验证码（管理员强制）")
+
+    @field_validator("totp_code")
+    @classmethod
+    def _validate_totp(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v.isdigit() or len(v) != 6:
+            raise ValueError("2FA 验证码必须是 6 位数字")
+        return v
 
 
 class TokenResponse(BaseModel):

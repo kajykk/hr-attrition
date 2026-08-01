@@ -1,12 +1,15 @@
 <script setup lang="ts">
 // 预警中心视图 - 列表 + 筛选 + 分页 + 详情面板 + 状态机转换 + 申诉 + 标记
 import { ref, computed, onMounted } from 'vue'
-import { apiClient } from '@/api/client'
+import { apiClient, extractApiError } from '@/api/client'
 import type {
   WarningOut,
   WarningStatusUpdate,
   Paginated,
 } from '@/api/types'
+
+// 演示数据仅限开发环境；生产环境失败展示真实错误
+const allowDemo = import.meta.env.DEV
 
 type Status = WarningOut['status']
 type Level = WarningOut['level']
@@ -16,6 +19,7 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
+const demoMode = ref(false)
 
 const statusFilter = ref<Status | ''>('')
 const levelFilter = ref<Level | ''>('')
@@ -23,7 +27,7 @@ const levelFilter = ref<Level | ''>('')
 const expandedId = ref<string | null>(null)
 const expandedItem = ref<WarningOut | null>(null)
 
-// 操作弹框状态
+// 操作弹框状态（operator_id 由后端从当前登录用户派生，前端不再收集）
 const actionModal = ref<{
   open: boolean
   kind: 'transition' | 'appeal' | 'mark' | ''
@@ -31,14 +35,12 @@ const actionModal = ref<{
   markType?: 'false_positive' | 'watching' | 'communicated'
   comment: string
   reason: string
-  operatorId: string
   warningId: string
 }>({
   open: false,
   kind: '',
   comment: '',
   reason: '',
-  operatorId: '',
   warningId: '',
 })
 
@@ -107,9 +109,12 @@ async function fetchWarnings() {
     items.value = data.items
     total.value = data.total
   } catch (e: unknown) {
-    const err = e as { message?: string }
-    errorMsg.value = err?.message || '预警列表加载失败，已切换演示模式'
-    fillDemo()
+    errorMsg.value = extractApiError(e, '预警列表加载失败')
+    if (allowDemo) {
+      demoMode.value = true
+      errorMsg.value += '（开发环境演示数据）'
+      fillDemo()
+    }
   } finally {
     loading.value = false
   }
@@ -156,7 +161,6 @@ function openTransition(target: Status) {
     targetStatus: target,
     comment: '',
     reason: '',
-    operatorId: '',
     warningId: expandedItem.value.id,
   }
 }
@@ -168,7 +172,6 @@ function openAppeal() {
     kind: 'appeal',
     reason: '',
     comment: '',
-    operatorId: '',
     warningId: expandedItem.value.id,
   }
 }
@@ -181,7 +184,6 @@ function openMark(mt: 'false_positive' | 'watching' | 'communicated') {
     markType: mt,
     comment: '',
     reason: '',
-    operatorId: '',
     warningId: expandedItem.value.id,
   }
 }
@@ -191,7 +193,6 @@ function closeModal() {
   actionModal.value.kind = ''
   actionModal.value.comment = ''
   actionModal.value.reason = ''
-  actionModal.value.operatorId = ''
   actionModal.value.targetStatus = undefined
   actionModal.value.markType = undefined
   actionMsg.value = ''
@@ -199,19 +200,13 @@ function closeModal() {
 
 async function submitAction() {
   if (!actionModal.value.warningId) return
-  if (!actionModal.value.operatorId) {
-    actionMsg.value = '请填写操作人 ID'
-    return
-  }
   actionLoading.value = true
   actionMsg.value = ''
   try {
     const wid = actionModal.value.warningId
-    const opId = actionModal.value.operatorId
     if (actionModal.value.kind === 'transition' && actionModal.value.targetStatus) {
       const body: WarningStatusUpdate = {
         target_status: actionModal.value.targetStatus,
-        operator_id: opId,
         comment: actionModal.value.comment || undefined,
       }
       const { data } = await apiClient.patch<WarningOut>(`/api/v1/warnings/${wid}/status`, body)
@@ -227,7 +222,6 @@ async function submitAction() {
       }
       const { data } = await apiClient.post<WarningOut>(`/api/v1/warnings/${wid}/appeal`, {
         reason: actionModal.value.reason,
-        operator_id: opId,
       })
       expandedItem.value = data
       const idx = items.value.findIndex((x) => x.id === wid)
@@ -236,7 +230,6 @@ async function submitAction() {
       const { data } = await apiClient.post<WarningOut>(`/api/v1/warnings/${wid}/mark`, {
         mark_type: actionModal.value.markType,
         comment: actionModal.value.comment,
-        operator_id: opId,
       })
       expandedItem.value = data
       const idx = items.value.findIndex((x) => x.id === wid)
@@ -244,8 +237,7 @@ async function submitAction() {
     }
     closeModal()
   } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string } } }
-    actionMsg.value = err?.response?.data?.detail || '操作失败'
+    actionMsg.value = extractApiError(e, '操作失败')
   } finally {
     actionLoading.value = false
   }
@@ -283,29 +275,76 @@ onMounted(fetchWarnings)
 
 <template>
   <div class="page">
-    <h2 class="page-title">预警中心</h2>
-    <p class="page-desc">预警状态机：P0 confirmed→review→fixing；P1/P2 confirmed→fixing 直转（D04 4.3）</p>
+    <h2 class="page-title">
+      预警中心
+    </h2>
+    <p class="page-desc">
+      预警状态机：P0 confirmed→review→fixing；P1/P2 confirmed→fixing 直转（D04 4.3）
+    </p>
 
-    <div v-if="errorMsg" class="banner warning">⚠ {{ errorMsg }}</div>
+    <div
+      v-if="errorMsg"
+      class="banner warning"
+    >
+      ⚠ {{ errorMsg }}
+    </div>
+    <div
+      v-if="demoMode"
+      class="banner"
+    >
+      开发环境演示数据（后端不可用）
+    </div>
 
     <!-- 筛选 -->
     <div class="toolbar">
-      <select v-model="statusFilter" @change="onFilterChange">
-        <option value="">全部状态</option>
-        <option value="new">新建</option>
-        <option value="confirmed">已确认</option>
-        <option value="review">复核中</option>
-        <option value="fixing">干预中</option>
-        <option value="appealing">申诉中</option>
-        <option value="closed">已关闭</option>
+      <select
+        v-model="statusFilter"
+        @change="onFilterChange"
+      >
+        <option value="">
+          全部状态
+        </option>
+        <option value="new">
+          新建
+        </option>
+        <option value="confirmed">
+          已确认
+        </option>
+        <option value="review">
+          复核中
+        </option>
+        <option value="fixing">
+          干预中
+        </option>
+        <option value="appealing">
+          申诉中
+        </option>
+        <option value="closed">
+          已关闭
+        </option>
       </select>
-      <select v-model="levelFilter" @change="onFilterChange">
-        <option value="">全部等级</option>
-        <option value="P0">P0 高级</option>
-        <option value="P1">P1 中级</option>
-        <option value="P2">P2 趋势</option>
+      <select
+        v-model="levelFilter"
+        @change="onFilterChange"
+      >
+        <option value="">
+          全部等级
+        </option>
+        <option value="P0">
+          P0 高级
+        </option>
+        <option value="P1">
+          P1 中级
+        </option>
+        <option value="P2">
+          P2 趋势
+        </option>
       </select>
-      <button class="secondary" @click="fetchWarnings" :disabled="loading">
+      <button
+        class="secondary"
+        :disabled="loading"
+        @click="fetchWarnings"
+      >
         {{ loading ? '加载中...' : '刷新' }}
       </button>
     </div>
@@ -325,8 +364,14 @@ onMounted(fetchWarnings)
             </tr>
           </thead>
           <tbody>
-            <template v-for="w in items" :key="w.id">
-              <tr class="clickable" @click="toggleDetail(w)">
+            <template
+              v-for="w in items"
+              :key="w.id"
+            >
+              <tr
+                class="clickable"
+                @click="toggleDetail(w)"
+              >
                 <td><span :class="levelBadgeClass(w.level)">{{ w.level }}</span></td>
                 <td>{{ w.employee_id }}</td>
                 <td :class="'risk-' + (w.risk_score >= 70 ? 'high' : w.risk_score >= 40 ? 'medium' : 'low')">
@@ -336,15 +381,26 @@ onMounted(fetchWarnings)
                 <td>{{ w.assigned_to || '-' }}</td>
                 <td>{{ fmtTime(w.created_at) }}</td>
                 <td>
-                  <button class="secondary small-btn" @click.stop="toggleDetail(w)">
+                  <button
+                    class="secondary small-btn"
+                    @click.stop="toggleDetail(w)"
+                  >
                     {{ expandedId === w.id ? '收起' : '详情' }}
                   </button>
                 </td>
               </tr>
-              <tr v-if="expandedId === w.id" class="detail-row">
+              <tr
+                v-if="expandedId === w.id"
+                class="detail-row"
+              >
                 <td colspan="7">
                   <div class="detail-panel">
-                    <div v-if="!expandedItem" class="empty">加载中...</div>
+                    <div
+                      v-if="!expandedItem"
+                      class="empty"
+                    >
+                      加载中...
+                    </div>
                     <div v-else>
                       <div class="detail-grid">
                         <div><span class="d-label">预警 ID：</span>{{ expandedItem.id }}</div>
@@ -359,13 +415,18 @@ onMounted(fetchWarnings)
                         <div><span class="d-label">确认时间：</span>{{ fmtTime(expandedItem.confirmed_at) }}</div>
                         <div><span class="d-label">关闭时间：</span>{{ fmtTime(expandedItem.closed_at) }}</div>
                       </div>
-                      <div v-if="expandedItem.message" class="detail-msg">
+                      <div
+                        v-if="expandedItem.message"
+                        class="detail-msg"
+                      >
                         <span class="d-label">说明：</span>{{ expandedItem.message }}
                       </div>
 
                       <!-- 状态机转换按钮 -->
                       <div class="action-section">
-                        <div class="action-title">状态转换</div>
+                        <div class="action-title">
+                          状态转换
+                        </div>
                         <div class="action-btns">
                           <button
                             v-for="t in availableTransitions"
@@ -375,25 +436,58 @@ onMounted(fetchWarnings)
                           >
                             {{ t.label }}
                           </button>
-                          <span v-if="availableTransitions.length === 0" class="muted">无可转换状态（终态）</span>
+                          <span
+                            v-if="availableTransitions.length === 0"
+                            class="muted"
+                          >无可转换状态（终态）</span>
                         </div>
                       </div>
 
                       <!-- 申诉按钮 -->
-                      <div class="action-section" v-if="expandedItem.status !== 'closed' && expandedItem.status !== 'appealing'">
-                        <div class="action-title">申诉</div>
+                      <div
+                        v-if="expandedItem.status !== 'closed' && expandedItem.status !== 'appealing'"
+                        class="action-section"
+                      >
+                        <div class="action-title">
+                          申诉
+                        </div>
                         <div class="action-btns">
-                          <button class="small-btn secondary" @click="openAppeal">发起申诉</button>
+                          <button
+                            class="small-btn secondary"
+                            @click="openAppeal"
+                          >
+                            发起申诉
+                          </button>
                         </div>
                       </div>
 
                       <!-- 标记按钮 -->
-                      <div class="action-section" v-if="expandedItem.status !== 'closed'">
-                        <div class="action-title">标记</div>
+                      <div
+                        v-if="expandedItem.status !== 'closed'"
+                        class="action-section"
+                      >
+                        <div class="action-title">
+                          标记
+                        </div>
                         <div class="action-btns">
-                          <button class="small-btn secondary" @click="openMark('false_positive')">误报</button>
-                          <button class="small-btn secondary" @click="openMark('watching')">关注</button>
-                          <button class="small-btn secondary" @click="openMark('communicated')">已沟通</button>
+                          <button
+                            class="small-btn secondary"
+                            @click="openMark('false_positive')"
+                          >
+                            误报
+                          </button>
+                          <button
+                            class="small-btn secondary"
+                            @click="openMark('watching')"
+                          >
+                            关注
+                          </button>
+                          <button
+                            class="small-btn secondary"
+                            @click="openMark('communicated')"
+                          >
+                            已沟通
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -402,7 +496,12 @@ onMounted(fetchWarnings)
               </tr>
             </template>
             <tr v-if="items.length === 0">
-              <td colspan="7" class="empty">暂无预警</td>
+              <td
+                colspan="7"
+                class="empty"
+              >
+                暂无预警
+              </td>
             </tr>
           </tbody>
         </table>
@@ -412,38 +511,87 @@ onMounted(fetchWarnings)
       <div class="pagination">
         <span class="page-info">第 {{ page }} 页 / 共 {{ Math.max(1, Math.ceil(total / pageSize)) }} 页（合计 {{ total }} 条）</span>
         <div class="page-btns">
-          <button class="secondary" :disabled="page <= 1 || loading" @click="prevPage">上一页</button>
-          <button class="secondary" :disabled="page * pageSize >= total || loading" @click="nextPage">下一页</button>
+          <button
+            class="secondary"
+            :disabled="page <= 1 || loading"
+            @click="prevPage"
+          >
+            上一页
+          </button>
+          <button
+            class="secondary"
+            :disabled="page * pageSize >= total || loading"
+            @click="nextPage"
+          >
+            下一页
+          </button>
         </div>
       </div>
     </div>
 
     <!-- 操作弹框 -->
-    <div v-if="actionModal.open" class="modal-mask" @click.self="closeModal">
+    <div
+      v-if="actionModal.open"
+      class="modal-mask"
+      @click.self="closeModal"
+    >
       <div class="modal">
         <div class="modal-title">
-          <template v-if="actionModal.kind === 'transition'">状态转换：→ {{ actionModal.targetStatus && statusLabels[actionModal.targetStatus] }}</template>
-          <template v-else-if="actionModal.kind === 'appeal'">发起申诉</template>
-          <template v-else-if="actionModal.kind === 'mark' && actionModal.markType">标记：{{ markTypeLabels[actionModal.markType] }}</template>
+          <template v-if="actionModal.kind === 'transition'">
+            状态转换：→ {{ actionModal.targetStatus && statusLabels[actionModal.targetStatus] }}
+          </template>
+          <template v-else-if="actionModal.kind === 'appeal'">
+            发起申诉
+          </template>
+          <template v-else-if="actionModal.kind === 'mark' && actionModal.markType">
+            标记：{{ markTypeLabels[actionModal.markType] }}
+          </template>
         </div>
         <div class="modal-body">
-          <div class="form-item">
-            <label>操作人 ID <span class="required">*</span></label>
-            <input v-model="actionModal.operatorId" placeholder="如 admin@hra.demo" />
-          </div>
-          <div v-if="actionModal.kind === 'appeal'" class="form-item">
+          <div
+            v-if="actionModal.kind === 'appeal'"
+            class="form-item"
+          >
             <label>申诉理由 <span class="required">*</span></label>
-            <textarea v-model="actionModal.reason" rows="3" placeholder="请输入申诉理由"></textarea>
+            <textarea
+              v-model="actionModal.reason"
+              rows="3"
+              placeholder="请输入申诉理由"
+            />
           </div>
-          <div v-else class="form-item">
+          <div
+            v-else
+            class="form-item"
+          >
             <label>{{ actionModal.kind === 'mark' ? '标记说明' : '备注' }}</label>
-            <textarea v-model="actionModal.comment" rows="3" :placeholder="actionModal.kind === 'mark' ? '请输入标记说明' : '请输入备注（可选）'"></textarea>
+            <textarea
+              v-model="actionModal.comment"
+              rows="3"
+              :placeholder="actionModal.kind === 'mark' ? '请输入标记说明' : '请输入备注（可选）'"
+            />
           </div>
-          <p v-if="actionMsg" class="action-error">{{ actionMsg }}</p>
+          <p class="tip">
+            操作人由当前登录用户自动记录
+          </p>
+          <p
+            v-if="actionMsg"
+            class="action-error"
+          >
+            {{ actionMsg }}
+          </p>
         </div>
         <div class="modal-foot">
-          <button class="secondary" @click="closeModal" :disabled="actionLoading">取消</button>
-          <button @click="submitAction" :disabled="actionLoading">
+          <button
+            class="secondary"
+            :disabled="actionLoading"
+            @click="closeModal"
+          >
+            取消
+          </button>
+          <button
+            :disabled="actionLoading"
+            @click="submitAction"
+          >
             {{ actionLoading ? '提交中...' : '提交' }}
           </button>
         </div>

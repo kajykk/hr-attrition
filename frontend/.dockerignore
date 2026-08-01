@@ -1,0 +1,11 @@
+# 前端构建上下文忽略（P1-8：防止 node_modules/dist 进入镜像）
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.vscode
+.idea
+logs
+*.log
+npm-debug.log*

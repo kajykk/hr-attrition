@@ -71,6 +71,7 @@ services:
   # 生产环境改用阿里云 RDS PostgreSQL 15 高可用版（D10 2.1）
   # 配置：shared_buffers=2GB / work_mem=64MB / max_connections=200
   # 主从：流复制（异步）+ WAL 归档至 OSS
+  # 注意：host 端口 5433/6380 避免与本地已装 PG(5432)/Redis(6379) 冲突
   postgres:
     image: postgres:15-alpine
     environment:
@@ -78,7 +79,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hra}
       POSTGRES_DB: ${POSTGRES_DB:-hra}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -97,7 +98,7 @@ services:
     image: redis:7-alpine
     command: redis-server --appendonly yes --save 300 1
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis-data:/data
     healthcheck:

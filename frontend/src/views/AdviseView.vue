@@ -1,8 +1,12 @@
 <script setup lang="ts">
 // AI 保留建议视图 - SSE 流式接收 + 打字动画
 import { ref, onMounted, nextTick, useTemplateRef } from 'vue'
-import { apiClient } from '@/api/client'
+import { apiClient, extractApiError } from '@/api/client'
+import { getAccessToken, getStoredUser } from '@/api/auth-keys'
 import type { WarningOut, Paginated, AdviseMetadata } from '@/api/types'
+
+// 演示数据仅限开发环境；生产环境失败展示真实错误
+const allowDemo = import.meta.env.DEV
 
 const warningId = ref('')
 const predictionId = ref('')
@@ -11,6 +15,7 @@ const done = ref(false)
 const adviceText = ref('')
 const metadata = ref<AdviseMetadata | null>(null)
 const errorMsg = ref('')
+const demoMode = ref(false)
 
 // 预警下拉选项
 const warningOptions = ref<Array<{ id: string; label: string }>>([])
@@ -27,13 +32,16 @@ async function loadWarningOptions() {
       id: w.id,
       label: `${w.id} · ${w.level} · 员工 ${w.employee_id} · 分 ${w.risk_score}`,
     }))
-  } catch {
-    // 接口不可用时填演示选项
-    warningOptions.value = [
-      { id: 'w-001', label: 'w-001 · P0 · 员工 emp-001 · 分 87' },
-      { id: 'w-002', label: 'w-002 · P1 · 员工 emp-042 · 分 64' },
-      { id: 'w-003', label: 'w-003 · P2 · 员工 emp-118 · 分 48' },
-    ]
+  } catch (e: unknown) {
+    errorMsg.value = extractApiError(e, '预警列表加载失败')
+    if (allowDemo) {
+      demoMode.value = true
+      warningOptions.value = [
+        { id: 'w-001', label: 'w-001 · P0 · 员工 emp-001 · 分 87' },
+        { id: 'w-002', label: 'w-002 · P1 · 员工 emp-042 · 分 64' },
+        { id: 'w-003', label: 'w-003 · P2 · 员工 emp-118 · 分 48' },
+      ]
+    }
   }
 }
 
@@ -47,21 +55,15 @@ async function generate() {
     return
   }
   errorMsg.value = ''
+  demoMode.value = false
   streaming.value = true
   done.value = false
   adviceText.value = ''
   metadata.value = null
 
-  const token = localStorage.getItem('hra_token') || ''
-  const userStr = localStorage.getItem('hra_user')
-  let tenantId = ''
-  if (userStr) {
-    try {
-      tenantId = JSON.parse(userStr)?.tenant_id || ''
-    } catch {
-      /* ignore */
-    }
-  }
+  const token = getAccessToken() || ''
+  const user = getStoredUser<{ tenant_id?: string }>()
+  const tenantId = user?.tenant_id || ''
 
   // 构造 query
   const qs = new URLSearchParams()
@@ -124,10 +126,13 @@ async function generate() {
     // 流结束但未收到 [DONE] 也标记完成
     done.value = true
   } catch (e: unknown) {
-    const err = e as { message?: string }
-    errorMsg.value = err?.message || '生成失败，使用演示建议'
-    // 演示模式：模拟流式输出
-    await simulateStreaming()
+    errorMsg.value = extractApiError(e, '生成失败')
+    // 演示模式仅限开发环境
+    if (allowDemo) {
+      demoMode.value = true
+      errorMsg.value += '（开发环境演示数据）'
+      await simulateStreaming()
+    }
   } finally {
     streaming.value = false
   }
@@ -186,51 +191,114 @@ onMounted(loadWarningOptions)
 
 <template>
   <div class="page">
-    <h2 class="page-title">AI 保留建议</h2>
-    <p class="page-desc">通义千问 Max SSE 流式生成（PII 脱敏后调用，D03 4.4 + ADR-003）</p>
+    <h2 class="page-title">
+      AI 保留建议
+    </h2>
+    <p class="page-desc">
+      通义千问 Max SSE 流式生成（PII 脱敏后调用，D03 4.4 + ADR-003）
+    </p>
 
-    <div v-if="errorMsg" class="banner warning">⚠ {{ errorMsg }}</div>
+    <div
+      v-if="errorMsg"
+      class="banner warning"
+    >
+      ⚠ {{ errorMsg }}
+    </div>
+    <div
+      v-if="demoMode"
+      class="banner"
+    >
+      开发环境演示数据（后端不可用）
+    </div>
 
     <div class="card input-card">
       <div class="form-row">
         <div class="field">
           <label>选择预警</label>
-          <select v-model="warningId" @change="onWarningSelect">
-            <option value="">-- 请选择 --</option>
-            <option v-for="o in warningOptions" :key="o.id" :value="o.id">{{ o.label }}</option>
+          <select
+            v-model="warningId"
+            @change="onWarningSelect"
+          >
+            <option value="">
+              -- 请选择 --
+            </option>
+            <option
+              v-for="o in warningOptions"
+              :key="o.id"
+              :value="o.id"
+            >
+              {{ o.label }}
+            </option>
           </select>
         </div>
         <div class="field">
           <label>预测 ID（可选）</label>
-          <input v-model="predictionId" placeholder="如 pred-001" />
+          <input
+            v-model="predictionId"
+            placeholder="如 pred-001"
+          >
         </div>
         <div class="field-actions">
-          <button @click="generate" :disabled="streaming || !warningId">
+          <button
+            :disabled="streaming || !warningId"
+            @click="generate"
+          >
             {{ streaming ? '生成中...' : '生成建议' }}
           </button>
-          <button class="secondary" @click="clearOutput" :disabled="streaming">清空</button>
+          <button
+            class="secondary"
+            :disabled="streaming"
+            @click="clearOutput"
+          >
+            清空
+          </button>
         </div>
       </div>
-      <p class="tip">也可手动输入预警 ID 后点击"生成建议"</p>
+      <p class="tip">
+        也可手动输入预警 ID 后点击"生成建议"
+      </p>
     </div>
 
     <div class="card output-card">
       <div class="output-head">
-        <h3 class="card-title">保留建议</h3>
-        <div v-if="streaming" class="typing-indicator">
-          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <h3 class="card-title">
+          保留建议
+        </h3>
+        <div
+          v-if="streaming"
+          class="typing-indicator"
+        >
+          <span class="dot" /><span class="dot" /><span class="dot" />
           生成中
         </div>
-        <span v-else-if="done" class="done-tag">[DONE]</span>
+        <span
+          v-else-if="done"
+          class="done-tag"
+        >[DONE]</span>
       </div>
 
-      <div v-if="!adviceText && !streaming" class="empty">点击"生成建议"开始</div>
-
-      <div v-else ref="outputRef" class="output-body">
-        <pre>{{ adviceText }}<span v-if="streaming" class="cursor">▋</span></pre>
+      <div
+        v-if="!adviceText && !streaming"
+        class="empty"
+      >
+        点击"生成建议"开始
       </div>
 
-      <div v-if="metadata" class="metadata">
+      <div
+        v-else
+        ref="outputRef"
+        class="output-body"
+      >
+        <pre>{{ adviceText }}<span
+v-if="streaming"
+                                   class="cursor"
+        >▋</span></pre>
+      </div>
+
+      <div
+        v-if="metadata"
+        class="metadata"
+      >
         模型：<strong>{{ metadata.model || '-' }}</strong>
         | tokens：<strong>{{ metadata.tokens_used ?? '-' }}</strong>
         | 延迟：<strong>{{ metadata.latency_ms ?? '-' }}ms</strong>

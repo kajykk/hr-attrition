@@ -7,11 +7,19 @@
 
 公平性硬约束：gender/ethnicity/disability/birth_date 永不出现在模型特征中。
 缺失字段使用基于 employee.id 的确定性伪随机生成（hashlib 种子），确保同一员工每次得到相同特征。
+
+特征契约（与 T-302 训练侧对齐，防推理/训练定义漂移）：
+  - salary_percentile 统一为 0-1 薪资分位：DB 存 0-100 百分位（EmployeeCreate.ge/le=100），
+    推理时乘以 SALARY_PERCENTILE_SCALE（=0.01）归一；训练侧由部门内 MonthlyIncome 排名计算。
+  - 列名与列顺序必须等于训练元数据 feature_metadata.pkl 中 structured_feature_columns。
+  一致性由 assert_feature_contract() 校验（P1-5 修复）。
 """
 from __future__ import annotations
 
 import hashlib
+import pickle
 from datetime import date
+from pathlib import Path
 from typing import Tuple
 
 import numpy as np
@@ -24,6 +32,13 @@ from app.ml.feature_engineering import (
     N_MONTHS,
     STRUCTURED_FEATURE_COLUMNS,
 )
+
+# DB 百分位（0-100）→ 模型输入分位（0-1）的换算系数（显式契约，训练侧同理）
+SALARY_PERCENTILE_SCALE = 0.01
+
+_MODELS_DIR = Path(__file__).resolve().parent / "models"
+_FEATURE_METADATA_PATH = _MODELS_DIR / "feature_metadata.pkl"
+_training_metadata_cache: dict | None = None
 
 
 # ===== 部门名称映射（ORM 无 department 名称，用 position/level 推断） =====
@@ -86,14 +101,62 @@ def _years_at_company(hire_date) -> int:
 
 
 def _salary_percentile_value(employee) -> float:
-    """从 employee.salary_percentile（Decimal）读取，转为 0-1 浮点."""
+    """从 employee.salary_percentile（0-100 百分位 Decimal）读取，转为 0-1 浮点.
+
+    契约：DB 存 0-100 百分位，乘以 SALARY_PERCENTILE_SCALE（0.01）得到与训练侧
+    （部门内分位 0-1）同量纲的模型输入。
+    """
     sp = employee.salary_percentile
     if sp is None:
         return 0.5
     try:
-        return float(sp) / 100.0
+        return min(1.0, max(0.0, float(sp) * SALARY_PERCENTILE_SCALE))
     except (TypeError, ValueError):
         return 0.5
+
+
+def load_training_metadata() -> dict | None:
+    """懒加载训练侧特征元数据（feature_metadata.pkl）.
+
+    Returns:
+        元数据 dict；元数据文件缺失时返回 None（特征仍可构造，但跳过契约校验）。
+    """
+    global _training_metadata_cache
+    if _training_metadata_cache is not None:
+        return _training_metadata_cache
+    if not _FEATURE_METADATA_PATH.exists():
+        return None
+    try:
+        with open(_FEATURE_METADATA_PATH, "rb") as f:
+            _training_metadata_cache = pickle.load(f)
+    except (pickle.UnpicklingError, EOFError, OSError):
+        return None
+    return _training_metadata_cache
+
+
+def assert_feature_contract() -> None:
+    """校验推理侧特征契约与训练侧一致（列名 + 顺序）.
+
+    Raises:
+        RuntimeError: 元数据存在但列定义不一致（防推理/训练特征漂移）。
+    """
+    metadata = load_training_metadata()
+    if metadata is None:
+        # 未训练/未生成元数据时无法校验，跳过（显式契约仍由测试覆盖）
+        return
+    trained_struct = list(metadata.get("structured_feature_columns", []))
+    if trained_struct and trained_struct != list(STRUCTURED_FEATURE_COLUMNS):
+        raise RuntimeError(
+            "特征契约不一致：训练侧 structured_feature_columns 与推理侧 "
+            "STRUCTURED_FEATURE_COLUMNS 不同"
+        )
+    trained_behav = list(metadata.get("behavior_feature_columns", []))
+    expected_behav = sorted(
+        f"{p}_{s}" for p in BEHAVIOR_SERIES
+        for s in ("trend_slope", "mean", "std", "recent_change_rate")
+    )
+    if trained_behav and sorted(trained_behav) != expected_behav:
+        raise RuntimeError("特征契约不一致：行为特征列与训练侧不同")
 
 
 def build_structured_features(employee) -> pd.DataFrame:

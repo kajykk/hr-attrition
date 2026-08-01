@@ -1,15 +1,18 @@
 """预警路由（D05 3.4 + D04 4.3 状态机转换 + W4 申诉/标记）."""
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_role
+from app.core.logging import get_logger
 from app.core.tenant import get_current_tenant_id
 from app.db.session import get_db
-from app.models.user import User
+from app.models.user import (
+    ROLE_ADMIN, ROLE_HRBP, ROLE_HR_MANAGER, User,
+)
 from app.models.warning import WarningEvent, WarningRecord
 from app.schemas.warning import (
     ALLOWED_MARK_TYPES,
@@ -19,9 +22,39 @@ from app.schemas.warning import (
     WarningOut,
     WarningStatusUpdate,
 )
+from app.services.audit_service import append_audit_log
 from app.services.warning_service import WarningService
 
 router = APIRouter()
+
+# 预警处理角色（状态转换/标记）：HR 经理 / HRBP / 管理员
+_HR_ROLES = (ROLE_ADMIN, ROLE_HR_MANAGER, ROLE_HRBP)
+
+
+async def _log_warning_audit(
+    db: AsyncSession,
+    tenant_id,
+    action: str,
+    warning: WarningRecord,
+    operator_id,
+    before: dict | None = None,
+    after: dict | None = None,
+) -> None:
+    """写预警操作审计（best-effort，失败不阻断业务）."""
+    try:
+        await append_audit_log(
+            db=db,
+            tenant_id=tenant_id,
+            action=action,
+            resource_type="warning",
+            resource_id=warning.id,
+            user_id=operator_id,
+            before_value=before,
+            after_value=after,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("预警审计日志写入失败 | action=%s | warning_id=%s | err=%s",
+                       action, warning.id, e)
 
 
 @router.get("", response_model=PaginatedWarnings)
@@ -82,10 +115,11 @@ async def update_warning_status(
     warning_id: UUID,
     payload: WarningStatusUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(*_HR_ROLES)),
 ):
     """状态机转换（D05 3.4 PATCH /warnings/{id}/status + D04 4.3）.
 
+    仅 HR 角色（admin/hr_manager/hrbp）可执行；操作人取自认证用户而非客户端。
     转换合法性由 WarningService.transition 校验：
       - P0：confirmed → review → fixing（FR-LOOP-004 强制复核）
       - P1/P2：confirmed → fixing（直转）
@@ -100,11 +134,12 @@ async def update_warning_status(
     if w is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
 
+    operator_id = user.id  # 操作人从认证用户派生（防审计伪造）
     try:
         from_status, to_status = WarningService.transition(
             warning=w,
             target_status=payload.target_status,
-            operator_id=payload.operator_id,
+            operator_id=operator_id,
             comment=payload.comment,
         )
     except ValueError as e:
@@ -118,13 +153,20 @@ async def update_warning_status(
         action=to_status,
         from_status=from_status,
         to_status=to_status,
-        operator_id=payload.operator_id,
+        operator_id=operator_id,
         comment=payload.comment,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     db.add(event)
     await db.flush()
     await db.refresh(w)
+
+    # 审计日志（P2-10）
+    await _log_warning_audit(
+        db, tenant_id, "warning.transition", w, operator_id,
+        before={"status": from_status},
+        after={"status": to_status, "comment": payload.comment},
+    )
 
     return WarningOut.model_validate(w)
 
@@ -159,11 +201,12 @@ async def appeal_warning(
     if payload.description:
         comment += f" | {payload.description}"
 
+    operator_id = user.id  # 操作人从认证用户派生（防审计伪造）
     try:
         from_status, to_status = WarningService.transition(
             warning=w,
             target_status="appealing",
-            operator_id=payload.operator_id,
+            operator_id=operator_id,
             comment=comment,
         )
     except ValueError as e:
@@ -176,13 +219,20 @@ async def appeal_warning(
         action="appealing",
         from_status=from_status,
         to_status=to_status,
-        operator_id=payload.operator_id,
+        operator_id=operator_id,
         comment=comment,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     db.add(event)
     await db.flush()
     await db.refresh(w)
+
+    # 审计日志（P2-10）
+    await _log_warning_audit(
+        db, tenant_id, "warning.appeal", w, operator_id,
+        before={"status": from_status},
+        after={"status": to_status, "reason": payload.reason},
+    )
 
     return WarningOut.model_validate(w)
 
@@ -192,7 +242,7 @@ async def mark_warning(
     warning_id: UUID,
     payload: MarkRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(*_HR_ROLES)),
 ):
     """HR 标记预警（POST /warnings/{id}/mark）.
 
@@ -223,12 +273,18 @@ async def mark_warning(
         action="mark",
         from_status=w.status,
         to_status=w.status,  # 状态不变
-        operator_id=payload.operator_id,
+        operator_id=user.id,  # 操作人从认证用户派生（防审计伪造）
         comment=comment,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     db.add(event)
     await db.flush()
     await db.refresh(w)
+
+    # 审计日志（P2-10）
+    await _log_warning_audit(
+        db, tenant_id, "warning.mark", w, user.id,
+        after={"mark_type": payload.mark_type, "comment": payload.comment},
+    )
 
     return WarningOut.model_validate(w)

@@ -809,8 +809,8 @@ async def test_risk_service_predict_redis_set_failure_does_not_block(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_risk_service_predict_db_flush_failure_continues(monkeypatch):
-    """db.flush 异常时 RiskService 应继续返回结果（不写 prediction_id）."""
+async def test_risk_service_predict_db_flush_failure_raises(monkeypatch):
+    """db.flush 异常时应向上抛出（预测落库是核心功能，不再静默吞掉）."""
     from app.services import risk_service
 
     risk_service._reset_singletons()
@@ -841,12 +841,8 @@ async def test_risk_service_predict_db_flush_failure_continues(monkeypatch):
     db.add = MagicMock()
     db.flush = AsyncMock(side_effect=RuntimeError("flush failed"))
 
-    result = await RiskService.predict(emp_id, tenant_id, db=db)
-
-    # flush 失败 → prediction_id 为 None
-    assert result["prediction_id"] is None
-    # 仍返回风险分
-    assert result["risk_score"] == 50
+    with pytest.raises(RuntimeError, match="flush failed"):
+        await RiskService.predict(emp_id, tenant_id, db=db)
 
 
 @pytest.mark.asyncio

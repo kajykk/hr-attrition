@@ -5,10 +5,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import require_role
 from app.core.tenant import get_current_tenant_id
 from app.db.session import get_db
-from app.models.user import User
+from app.models.user import ROLE_ADMIN, ROLE_HRBP, ROLE_HR_MANAGER, ROLE_MANAGER, User
 from app.schemas.risk import (
     GlobalExplanationOut,
     PredictRequest,
@@ -20,13 +20,16 @@ from app.services.risk_service import RiskService, get_feature_display_name
 
 router = APIRouter()
 
+# 风险预测角色：HR 经理 / HRBP / 管理员 / 直线经理
+_RISK_ROLES = (ROLE_ADMIN, ROLE_HR_MANAGER, ROLE_HRBP, ROLE_MANAGER)
+
 
 @router.get("/employees/{employee_id}", response_model=RiskPredictionOut)
 async def get_employee_risk(
     employee_id: UUID,
     force_refresh: bool = False,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(*_RISK_ROLES)),
 ):
     """获取员工风险预测（D05 3.3 GET /risk/employees/{id}）."""
     tenant_id = get_current_tenant_id()
@@ -56,7 +59,7 @@ async def get_employee_risk(
 async def predict_risk(
     payload: PredictRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(*_RISK_ROLES)),
 ):
     """单员工风险预测（D05 3.3 POST /risk/predict）."""
     tenant_id = get_current_tenant_id()
@@ -85,7 +88,7 @@ async def predict_risk(
 async def get_employee_explanation(
     employee_id: UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(*_RISK_ROLES)),
 ):
     """获取员工 SHAP 解释（D05 3.3 GET /risk/employees/{id}/explanation）.
 
@@ -134,7 +137,7 @@ async def get_employee_explanation(
 async def global_explanation(
     window_days: int = 30,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(*_RISK_ROLES)),
 ):
     """全局特征重要性（D05 3.10 GET /risk/global-explanation，近 30 天聚合）."""
     tenant_id = get_current_tenant_id()

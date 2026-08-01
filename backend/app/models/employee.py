@@ -15,7 +15,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,6 +26,9 @@ class Employee(Base, UUIDPKMixin, TenantMixin, TimestampMixin, SoftDeleteMixin):
     """员工表 - 业务核心实体."""
 
     __tablename__ = "employees"
+    __table_args__ = (
+        UniqueConstraint("employee_no", "tenant_id", name="uq_employees_no_tenant"),
+    )
 
     employee_no: Mapped[str] = mapped_column(String(50), nullable=False, index=True, comment="工号（租户内唯一）")
 

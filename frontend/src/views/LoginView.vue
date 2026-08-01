@@ -42,32 +42,67 @@ function fillDemo() {
   <div class="login-container">
     <div class="login-card">
       <div class="brand">
-        <div class="brand-icon">🎯</div>
+        <div class="brand-icon">
+          🎯
+        </div>
         <h1>HRA</h1>
-        <p class="subtitle">企业员工离职风险与人才流失预警系统</p>
+        <p class="subtitle">
+          企业员工离职风险与人才流失预警系统
+        </p>
       </div>
       <form @submit.prevent="handleLogin">
         <div class="form-item">
           <label>邮箱</label>
-          <input v-model="email" type="email" required placeholder="user@example.com" autocomplete="username" />
+          <input
+            v-model="email"
+            type="email"
+            required
+            placeholder="user@example.com"
+            autocomplete="username"
+          >
         </div>
         <div class="form-item">
           <label>密码</label>
-          <input v-model="password" type="password" required placeholder="••••••••" autocomplete="current-password" />
+          <input
+            v-model="password"
+            type="password"
+            required
+            placeholder="••••••••"
+            autocomplete="current-password"
+          >
         </div>
         <div class="form-item">
           <label>2FA 验证码（管理员可选）</label>
-          <input v-model="totpCode" type="text" maxlength="6" placeholder="6 位数字" autocomplete="one-time-code" />
+          <input
+            v-model="totpCode"
+            type="text"
+            maxlength="6"
+            placeholder="6 位数字"
+            autocomplete="one-time-code"
+          >
         </div>
-        <p v-if="errorMsg" class="error">⚠ {{ errorMsg }}</p>
-        <button type="submit" :disabled="loading">
+        <p
+          v-if="errorMsg"
+          class="error"
+        >
+          ⚠ {{ errorMsg }}
+        </p>
+        <button
+          type="submit"
+          :disabled="loading"
+        >
           {{ loading ? '登录中...' : '登录' }}
         </button>
       </form>
       <div class="demo-tip">
         <span>演示账号：</span>
         <code>admin@hra.demo</code> / <code>admin123</code>
-        <button class="link-btn" @click="fillDemo">填入</button>
+        <button
+          class="link-btn"
+          @click="fillDemo"
+        >
+          填入
+        </button>
       </div>
     </div>
   </div>

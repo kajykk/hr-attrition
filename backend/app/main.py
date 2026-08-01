@@ -15,7 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import api_router
 from app.core.config import settings
 from app.core.logging import get_logger, setup_logging
+from app.core.rate_limit import init_limiter
 from app.core.redis import close_redis, init_redis
+from app.core.request_id import RequestIdMiddleware
 from app.core.tenant import tenant_middleware
 
 setup_logging()
@@ -31,6 +33,17 @@ async def lifespan(app: FastAPI):
         await init_redis()
     except Exception as e:  # noqa: BLE001
         logger.warning("Redis 初始化异常（不影响启动） | err=%s", e)
+    # 非生产环境建表兜底（生产环境必须使用 alembic upgrade head）
+    if not settings.is_prod:
+        try:
+            from app.db.base import Base
+            from app.db.session import engine
+
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("开发环境建表完成（create_all，生产请用 alembic）")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("开发环境 create_all 失败（请确认 DB 可用） | err=%s", e)
     yield
     # 关闭 Redis
     try:
@@ -62,6 +75,12 @@ app.add_middleware(
 # 租户隔离中间件（ADR-002，从 JWT 注入 tenant_id 到 ContextVar）
 app.middleware("http")(tenant_middleware)
 
+# 请求 ID 中间件（P2-11：全链路追踪）
+app.add_middleware(RequestIdMiddleware)
+
+# 限流（slowapi，P1-6 登录防爆破）
+init_limiter(app)
+
 # ===== 业务路由（D05 v1） =====
 app.include_router(api_router, prefix="/api/v1")
 
@@ -69,17 +88,49 @@ app.include_router(api_router, prefix="/api/v1")
 # ===== 健康检查（D05 3.9 GET /admin/health） =====
 @app.get("/health", tags=["health"])
 async def health() -> dict:
-    """健康检查端点（公开）."""
+    """健康检查端点（公开）.
+
+    P2-11：真实探测依赖（DB SELECT 1 / Redis PING），探测失败标记 degraded
+    但不返回 5xx（避免 LB 误判）；LLM 未配置时标记 not_configured。
+    """
+    components: dict = {}
+
+    # 数据库探测（短超时，失败不抛）
+    try:
+        from sqlalchemy import text
+
+        from app.db.session import engine
+
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        components["database"] = "healthy"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("健康检查：数据库探测失败 | err=%s", e)
+        components["database"] = "degraded"
+
+    # Redis 探测
+    try:
+        from app.core.redis import get_redis
+
+        redis = get_redis()
+        if redis is None:
+            components["redis"] = "not_configured"
+        else:
+            await redis.ping()
+            components["redis"] = "healthy"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("健康检查：Redis 探测失败 | err=%s", e)
+        components["redis"] = "degraded"
+
+    components["celery"] = "healthy"
+    components["llm"] = "healthy" if settings.DASHSCOPE_API_KEY else "not_configured"
+
+    status = "healthy" if all(v == "healthy" for v in components.values() if v != "not_configured") else "degraded"
     return {
-        "status": "healthy",
+        "status": status,
         "version": "1.0.0",
         "env": settings.APP_ENV,
-        "components": {
-            "database": "healthy",
-            "redis": "healthy",
-            "celery": "healthy",
-            "llm": "healthy" if settings.DASHSCOPE_API_KEY else "not_configured",
-        },
+        "components": components,
     }
 
 

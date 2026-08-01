@@ -1,9 +1,12 @@
 <script setup lang="ts">
-// 员工管理视图 - 列表表格 + 搜索 + 分页 + 风险色块，点击跳转风险预测
-import { ref, computed, onMounted } from 'vue'
+// 员工管理视图 - 列表表格 + 服务端搜索 + 分页 + 风险色块，点击跳转风险预测
+import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { apiClient } from '@/api/client'
+import { apiClient, extractApiError } from '@/api/client'
 import type { EmployeeListItem, Paginated } from '@/api/types'
+
+// 演示数据仅限开发环境
+const allowDemo = import.meta.env.DEV
 
 const router = useRouter()
 
@@ -26,33 +29,36 @@ const levelLabels: Record<string, string> = {
   high: '高',
 }
 
-// 前端过滤（按工号 / 脱敏姓名）
-const filteredItems = computed(() => {
-  const kw = searchKeyword.value.trim().toLowerCase()
-  if (!kw) return items.value
-  return items.value.filter(
-    (e) =>
-      e.employee_no.toLowerCase().includes(kw) ||
-      (e.name_masked || '').toLowerCase().includes(kw) ||
-      (e.department_name || '').toLowerCase().includes(kw)
-  )
+// 服务端搜索：输入防抖后重新拉取（避免与分页状态矛盾）
+let searchTimer: number | undefined
+watch(searchKeyword, () => {
+  window.clearTimeout(searchTimer)
+  searchTimer = window.setTimeout(() => {
+    page.value = 1
+    fetchEmployees()
+  }, 350)
 })
 
 async function fetchEmployees() {
   loading.value = true
   errorMsg.value = ''
   try {
+    const params: Record<string, unknown> = { page: page.value, page_size: pageSize.value }
+    const kw = searchKeyword.value.trim()
+    if (kw) params.keyword = kw
     const { data } = await apiClient.get<Paginated<EmployeeListItem>>('/api/v1/employees', {
-      params: { page: page.value, page_size: pageSize.value },
+      params,
     })
     items.value = data.items
     total.value = data.total
     demoMode.value = false
   } catch (e: unknown) {
-    const err = e as { message?: string }
-    errorMsg.value = err?.message || '员工列表加载失败，已切换演示模式'
-    demoMode.value = true
-    fillDemo()
+    errorMsg.value = extractApiError(e, '员工列表加载失败')
+    if (allowDemo) {
+      demoMode.value = true
+      errorMsg.value += '（开发环境演示数据）'
+      fillDemo()
+    }
   } finally {
     loading.value = false
   }
@@ -110,18 +116,31 @@ onMounted(fetchEmployees)
 
 <template>
   <div class="page">
-    <h2 class="page-title">员工管理</h2>
-    <p class="page-desc">PII 字段脱敏展示，点击行进入风险预测（D05 3.2 GET /employees）</p>
+    <h2 class="page-title">
+      员工管理
+    </h2>
+    <p class="page-desc">
+      PII 字段脱敏展示，点击行进入风险预测（D05 3.2 GET /employees）
+    </p>
 
-    <div v-if="demoMode" class="banner warning">⚠ {{ errorMsg }}</div>
+    <div
+      v-if="demoMode"
+      class="banner warning"
+    >
+      ⚠ {{ errorMsg }}
+    </div>
 
     <div class="toolbar">
       <input
         v-model="searchKeyword"
         placeholder="按工号 / 姓名 / 部门搜索"
         class="search-input"
-      />
-      <button class="secondary" @click="fetchEmployees" :disabled="loading">
+      >
+      <button
+        class="secondary"
+        :disabled="loading"
+        @click="fetchEmployees"
+      >
         {{ loading ? '加载中...' : '刷新' }}
       </button>
     </div>
@@ -143,7 +162,7 @@ onMounted(fetchEmployees)
           </thead>
           <tbody>
             <tr
-              v-for="emp in filteredItems"
+              v-for="emp in items"
               :key="emp.id"
               class="clickable"
               @click="goToRisk(emp)"
@@ -154,7 +173,10 @@ onMounted(fetchEmployees)
               <td>{{ emp.position || '-' }}</td>
               <td>{{ statusLabel(emp.status) }}</td>
               <td>
-                <span v-if="emp.risk_score !== null" :class="'risk-' + emp.risk_level">
+                <span
+                  v-if="emp.risk_score !== null"
+                  :class="'risk-' + emp.risk_level"
+                >
                   {{ emp.risk_score }}
                 </span>
                 <span v-else>-</span>
@@ -171,8 +193,13 @@ onMounted(fetchEmployees)
               </td>
               <td>{{ fmtTime(emp.updated_at) }}</td>
             </tr>
-            <tr v-if="filteredItems.length === 0">
-              <td colspan="8" class="empty">无匹配员工数据</td>
+            <tr v-if="items.length === 0">
+              <td
+                colspan="8"
+                class="empty"
+              >
+                {{ searchKeyword.trim() ? '无匹配员工数据' : '暂无员工数据' }}
+              </td>
             </tr>
           </tbody>
         </table>
@@ -182,8 +209,20 @@ onMounted(fetchEmployees)
       <div class="pagination">
         <span class="page-info">第 {{ page }} 页 / 共 {{ Math.max(1, Math.ceil(total / pageSize)) }} 页（合计 {{ total }} 条）</span>
         <div class="page-btns">
-          <button class="secondary" :disabled="page <= 1 || loading" @click="prevPage">上一页</button>
-          <button class="secondary" :disabled="page * pageSize >= total || loading" @click="nextPage">下一页</button>
+          <button
+            class="secondary"
+            :disabled="page <= 1 || loading"
+            @click="prevPage"
+          >
+            上一页
+          </button>
+          <button
+            class="secondary"
+            :disabled="page * pageSize >= total || loading"
+            @click="nextPage"
+          >
+            下一页
+          </button>
         </div>
       </div>
     </div>
