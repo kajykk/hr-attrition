@@ -133,6 +133,10 @@ def detect_drift() -> dict:
         "critical_features": summary["critical_features"],
         "warning_features": summary["warning_features"],
         "passed": summary["passed"],
+        "features": [
+            {"feature": f["feature"], "psi": f["psi"]}
+            for f in summary.get("features", [])
+        ],
         "summary": summary["summary"],
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }

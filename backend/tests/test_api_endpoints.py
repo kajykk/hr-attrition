@@ -196,6 +196,149 @@ def test_admin_kill_switch_status_with_token(client, monkeypatch):
 
 
 # ============================================================
+# 3.5 治理端点：漂移检测 / 公平性监测（D03 4.5 + D10 7.3）
+# ============================================================
+
+
+def test_admin_drift_requires_auth(client):
+    """GET /api/v1/admin/drift 无 token 应返回 401."""
+    resp = client.get("/api/v1/admin/drift")
+    assert resp.status_code == 401
+
+
+def test_admin_fairness_requires_auth(client):
+    """GET /api/v1/admin/fairness 无 token 应返回 401."""
+    resp = client.get("/api/v1/admin/fairness")
+    assert resp.status_code == 401
+
+
+def _login_admin_override(app):
+    """复用 kill-switch 测试的 admin 身份覆盖（get_current_user + get_db）. """
+    from app.api import deps
+    from app.db.session import get_db
+    from app.models.user import User
+
+    fake_user = MagicMock(spec=User)
+    fake_user.id = uuid4()
+    fake_user.tenant_id = uuid4()
+    fake_user.role = "admin"
+    fake_user.status = "active"
+
+    async def _fake_get_current_user():
+        return fake_user
+
+    app.dependency_overrides[deps.get_current_user] = _fake_get_current_user
+    app.dependency_overrides[get_db] = _fake_async_gen_yield_none
+
+
+def test_admin_drift_with_token(client, monkeypatch):
+    """GET /api/v1/admin/drift 带 token 应返回契约字段（mock detect_drift）."""
+    from app.main import app
+
+    _login_admin_override(app)
+    try:
+        monkeypatch.setattr(
+            "app.api.v1.admin.detect_drift",
+            lambda: {
+                "status": "ok",
+                "max_psi": 0.14,
+                "critical_features": ["overtime_hours_30d"],
+                "features": [
+                    {"feature": "overtime_hours_30d", "psi": 0.14},
+                    {"feature": "days_since_last_login", "psi": 0.09},
+                ],
+                "checked_at": "2026-08-01T02:00:00+00:00",
+            },
+        )
+        resp = client.get(
+            "/api/v1/admin/drift",
+            headers={"Authorization": f"Bearer {create_access_token(str(uuid4()), str(uuid4()), 'admin')}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["max_psi"] == 0.14
+        assert body["critical_features"] == ["overtime_hours_30d"]
+        assert body["features"][0]["feature"] == "overtime_hours_30d"
+        assert "computed_at" in body
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_admin_drift_skipped_returns_502(client, monkeypatch):
+    """漂移检测数据不可用（skipped）时应返回 502 与原因."""
+    from app.main import app
+
+    _login_admin_override(app)
+    try:
+        monkeypatch.setattr(
+            "app.api.v1.admin.detect_drift",
+            lambda: {"status": "skipped", "reason": "基线数据不可用", "checked_at": "2026-08-01T02:00:00+00:00"},
+        )
+        resp = client.get(
+            "/api/v1/admin/drift",
+            headers={"Authorization": f"Bearer {create_access_token(str(uuid4()), str(uuid4()), 'admin')}"},
+        )
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "基线数据不可用"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_admin_fairness_with_token(client, monkeypatch):
+    """GET /api/v1/admin/fairness 应返回 4 维度偏差（百分比换算）."""
+    from app.main import app
+
+    _login_admin_override(app)
+    try:
+        monkeypatch.setattr(
+            "app.api.v1.admin.fairness_daily_report",
+            lambda: {
+                "status": "ok",
+                "dimensions": {
+                    "gender": {"parity_difference": 0.032, "passed": True, "label": "性别 (M/F)"},
+                    "age": {"parity_difference": 0.048, "passed": True, "label": "年龄 (<35 / >=35)"},
+                    "ethnicity": {"parity_difference": 0.021, "passed": True, "label": "民族 (汉族/少数民族)"},
+                    "disability": {"parity_difference": 0.015, "passed": True, "label": "残障 (0/1)"},
+                },
+                "checked_at": "2026-08-01T03:00:00+00:00",
+            },
+        )
+        resp = client.get(
+            "/api/v1/admin/fairness",
+            headers={"Authorization": f"Bearer {create_access_token(str(uuid4()), str(uuid4()), 'admin')}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["dimensions"]) == 4
+        by_name = {d["name"]: d for d in body["dimensions"]}
+        assert by_name["gender"]["disparity"] == 3.2  # 0.032 * 100 四舍五入
+        assert by_name["age"]["disparity"] == 4.8
+        assert by_name["disability"]["label"] == "残障 (0/1)"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_admin_fairness_skipped_returns_502(client, monkeypatch):
+    """公平性数据不可用（skipped）时应返回 502."""
+    from app.main import app
+
+    _login_admin_override(app)
+    try:
+        monkeypatch.setattr(
+            "app.api.v1.admin.fairness_daily_report",
+            lambda: {"status": "skipped", "reason": "公平性数据文件不存在", "checked_at": "2026-08-01T03:00:00+00:00"},
+        )
+        resp = client.get(
+            "/api/v1/admin/fairness",
+            headers={"Authorization": f"Bearer {create_access_token(str(uuid4()), str(uuid4()), 'admin')}"},
+        )
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "公平性数据文件不存在"
+    finally:
+        app.dependency_overrides.clear()
+
+
+# ============================================================
 # 4. 404 与无效路由
 # ============================================================
 
