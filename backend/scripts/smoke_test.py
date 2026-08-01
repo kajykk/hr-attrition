@@ -71,7 +71,7 @@ def main():
                    json={"employee_no": "SMK001", "name": "冒烟测试",
                          "email": "smoke@hra-demo.com", "hire_date": "2024-01-15",
                          "salary_percentile": 42}, timeout=10)
-    check("创建员工 201", r.status_code == 201, str(r.text[:300]))
+    check("创建员工 201（重复冒烟 409 视为通过）", r.status_code in (201, 409), str(r.text[:300]))
     emp_id = None
     if r.status_code == 201:
         emp_id = r.json()["id"]
