@@ -33,7 +33,10 @@ def write_heartbeat(redis_client) -> None:
         payload = json.dumps(
             {"ts": datetime.now(UTC).isoformat()}, ensure_ascii=False
         )
-        redis_client.set(_CELERY_HEARTBEAT_KEY, payload)
+        # 带 TTL（阈值+余量），beat 失联后 key 自动过期自清理
+        redis_client.setex(
+            _CELERY_HEARTBEAT_KEY, _HEARTBEAT_MAX_AGE_SECONDS + 60, payload
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("Celery 心跳写入失败 | err=%s", e)
 

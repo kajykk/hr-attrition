@@ -59,6 +59,9 @@ def test_celery_heartbeat_roundtrip():
         def set(self, key: str, value: str) -> None:
             self._store[key] = value
 
+        def setex(self, key: str, ttl: int, value: str) -> None:
+            self._store[key] = value
+
         def get(self, key: str) -> str | None:
             return self._store.get(key)
 

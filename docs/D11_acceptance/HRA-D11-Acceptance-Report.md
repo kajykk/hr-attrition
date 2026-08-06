@@ -233,7 +233,7 @@
 | 6 | 灾备演练待执行 | S-SEC-07 | 邝振华 | M8 后季度演练 |
 | 7 | 模型卡片待官网公开 | C-COMP-08 | 邝振华 | M8 前 |
 | 8 | KMS Secret 托管待生产接入 | S-SEC-08 | 邝振华 | M7 |
-| 9 | Docker 全栈启动验证待 C 盘空间释放 | S-SEC-07 / D-DOC-04 | 邝振华 | M7 前 |
+| 9 | ~~Docker 全栈启动验证待 C 盘空间释放~~（2026-08-06 完成：data-root 迁 E 盘后全栈 9/11 起验，loki/promtail 待镜像源恢复）| S-SEC-07 / D-DOC-04 | 邝振华 | 已完成 |
 | 10 | 批量预测吞吐 + LCP 待实测 | P-PERF-03/06 | 邝振华 | M7 前 |
 
 > 已完成项：~~Locust 压测~~（2026-07-27 通过 httpx ASGITransport 完成 100 并发压测，`perf_report.json`）；~~数据删除 Celery 任务~~（2026-07-27 实现并测试）。
@@ -250,7 +250,7 @@
 | 安全扫描 | 生产环境 ZAP + Trivy 扫描，输出报告 | 邝振华 | 2026-09-14 |
 | 灾备演练 | 首次季度演练（数据库故障切换）| 邝振华 | 2026-12（M8 后）|
 | 模型卡片公开 | 官网发布 A03 §10 模型卡片 | 邝振华 | 2026-09-21 |
-| Docker 全栈启动 | 释放 C 盘空间或将 Docker data-root 迁至 E 盘后执行 `docker compose up` 验证 | 邝振华 | 2026-09-10 |
+| Docker 全栈启动 | 释放 C 盘空间或将 Docker data-root 迁至 E 盘后执行 `docker compose up` 验证 | 邝振华 | 2026-08-06 已完成（data-root 迁 E 盘，9/11 服务验证通过）|
 | 批量预测 + LCP 实测 | Celery 批量任务实测 + Lighthouse 前端性能 | 邝振华 | 2026-09-10 |
 
 ---

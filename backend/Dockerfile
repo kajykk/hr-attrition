@@ -8,7 +8,10 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # 系统依赖（asyncpg/bcrypt/lightgbm 编译需要）
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 换国内 apt 镜像源（官方 deb.debian.org 在国内网络极慢，会拖垮构建）
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null; \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/*.sources 2>/dev/null; \
+    apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -17,7 +20,7 @@ COPY pyproject.toml ./
 # 创建临时包结构使 pip install 可解析（避免源码未到位导致失败）
 RUN mkdir -p app && echo "" > app/__init__.py && \
     pip install --upgrade pip && \
-    pip install ".[ml]" && \
+    pip install ".[serving]" && \
     rm -rf app
 
 # 复制源码 + 模型工件

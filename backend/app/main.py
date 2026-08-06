@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.api.v1 import api_router
 from app.core.config import settings
@@ -83,6 +84,16 @@ init_limiter(app)
 
 # ===== 业务路由（D05 v1） =====
 app.include_router(api_router, prefix="/api/v1")
+
+
+# ===== Prometheus 指标（D03 7.1：/metrics 供 prometheus 采集） =====
+# 排除自身与健康检查的噪声；不入 OpenAPI schema
+Instrumentator(
+    should_group_status_codes=False,
+    should_group_untemplated=True,
+    should_respect_env_var=False,
+    excluded_handlers=["/metrics", "/health"],
+).instrument(app).expose(app, include_in_schema=False)
 
 
 # ===== 健康检查（D05 3.9 GET /admin/health） =====

@@ -165,6 +165,7 @@ ____
 | W8-DATA-RETENTION-IMP | 2026-08-06 | 邝振华 | 实施 data_retention.py（同上）；补 C-COMP-06 关联删除与 13 单元测试 | 常规 | 邝振华 | C-COMP-06 |
 | W8-FEATURES-REAL | 2026-08-06 | 邝振华 | **深度审查修复（审查 commit c90e53f）**：P0-1 warnings logger 未定义；P0-2 限流客户端 IP 改解析 X-Forwarded-For（docker-compose 回滚 proxy-headers）；P0-3 生产环境拒绝占位 JWT/PII 密钥启动；P0-4 推理特征真实化——employees 新增 20 真实特征字段（0002 迁移）+ feature_provider 真实字段优先、缺失回退训练分布中位/众数常量（彻底移除 ID 种子伪随机），31 列契约不变无需重训；P1-6 /health celery 由硬编码 healthy 改为 Redis 心跳真实探测 | 常规 | 邝振华 | T-406/402 |
 | W8-ENGQ | 2026-08-06 | 邝振华 | 工程化收敛：pyproject 显式 `[tool.ruff.lint]` 规则集（此前缺失）+ 全量修复 321 项（UP045/UP017/F401/I001/BLE001 等）、DTZ011 业务日历日统一 Asia/Shanghai 时区（新增 `app/core/timeutil.py`）、JWT/BLE001 精确捕获、alembic 0001/0002/scripts 目录同清；新增迁移契约测试 22 项（模型=0002 迁移字段/类型/回滚）；测试 290→314 | 标准 | - | T-702 |
+| W8-FULLSTACK | 2026-08-06 | 邝振华 | **全栈部署实证（D11 遗留项 S-SEC-07/D-DOC-04 完成）**：`docker compose up` 全栈 9/11 服务启动验证（nginx/api/worker/beat/postgres/redis/prometheus/grafana；loki/promtail 因镜像源 429 暂缺，已用备用源重试无果，待网络恢复补挂）；发现并修复 2 个部署缺口——① api 无 `/metrics` 端点（prometheus.yml 声明 D03 7.1 但从未实现）→ 引入 prometheus-fastapi-instrumentator 暴露 /metrics；② Celery 心跳 key 无 TTL → 改 setex（阈值+60s 自清理）；环境适配——Dockerfile 换阿里 apt 源（官方源国内极慢）、运行时镜像改用新增 `[serving]` extra（剔除 sdv/torch CUDA 4GB+ 训练依赖，镜像 2.34GB）；Docker data-root 迁 E 盘（junction，C 盘 0.3GB→29.7GB）；与 dws 共存端口重映射（本机 override，gitignore）；全栈验收：/health 三组件真绿、前端 8080、grafana 3001、prometheus 采集 api UP | 常规 | 邝振华 | S-SEC-07/D-DOC-04 |
 
 ### 3.2 文档版本变更汇总
 

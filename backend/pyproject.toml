@@ -27,6 +27,8 @@ dependencies = [
     "python-multipart>=0.0.9",
     "email-validator>=2.1.0",
     "pyotp>=2.9.0",
+    # Prometheus 指标（D03 7.1，/metrics 供采集）
+    "prometheus-fastapi-instrumentator>=7.0.0",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +59,16 @@ ml-text = [
     "torch>=2.1.0",
     "transformers>=4.36.0",
     "onnxruntime>=1.18.0",
+]
+serving = [
+    # 运行时推理依赖（api/worker/beat 镜像专用，D10 部署口径）
+    # 注意：sdv/torch（ml/ml-text）仅训练阶段需要，禁止引入运行时镜像
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.5.0,<2.0.0",
+    "joblib>=1.4.2",
+    "lightgbm>=4.3.0",
+    "shap>=0.45.0",
 ]
 
 [tool.setuptools.packages.find]
