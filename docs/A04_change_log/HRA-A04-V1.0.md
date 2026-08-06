@@ -161,6 +161,10 @@ ____
 | W8-DATA-RETENTION | 2026-07-27 | 邝振华 | 新增 `app/tasks/data_retention.py`：C-COMP-06 物理删除 Celery 任务（每周日 04:00），按外键顺序删除 warning_events→warnings→risk_predictions→employees，保留 audit_logs 5 年，未结申诉员工不删除；13 单元测试 | 标准 | - | C-COMP-06 |
 | W8-PERF-TEST | 2026-07-27 | 邝振华 | 性能压测：新增 `backend/scripts/load_test.py`（httpx ASGITransport 100 并发），P-PERF-01 P99=111.57ms / P-PERF-02 P99=251.04ms / P-PERF-05 100 并发 100% 成功率；输出 `perf_report.json` | 标准 | - | P-PERF-01/02/05 |
 | W8-D11-REPORT | 2026-07-27 | 邝振华 | D11 验收报告更新：公平性数据修正（性别 0.83% / 年龄 2.69% / 民族 0.27% / 残障 3.20%）；性能压测数据填入；C-COMP-06 状态更新为达标；遗留问题与整改计划同步 | 常规 | 邝振华 | T-806 |
+| W8-SEC-AUDIT | 2026-08-06 | 邝振华 | P0-P2 安全/工程审计修复：RBAC 角色补齐 + 管理员强制 TOTP 2FA、Alembic 初始化迁移、slowapi 限流接入、登录限流、SHA256 审计哈希链、DB 事务回滚一致、结构化日志 + Prometheus 指标、测试 269→282 | 紧急 | 邝振华 | T-706 |
+| W8-DATA-RETENTION-IMP | 2026-08-06 | 邝振华 | 实施 data_retention.py（同上）；补 C-COMP-06 关联删除与 13 单元测试 | 常规 | 邝振华 | C-COMP-06 |
+| W8-FEATURES-REAL | 2026-08-06 | 邝振华 | **深度审查修复（审查 commit c90e53f）**：P0-1 warnings logger 未定义；P0-2 限流客户端 IP 改解析 X-Forwarded-For（docker-compose 回滚 proxy-headers）；P0-3 生产环境拒绝占位 JWT/PII 密钥启动；P0-4 推理特征真实化——employees 新增 20 真实特征字段（0002 迁移）+ feature_provider 真实字段优先、缺失回退训练分布中位/众数常量（彻底移除 ID 种子伪随机），31 列契约不变无需重训；P1-6 /health celery 由硬编码 healthy 改为 Redis 心跳真实探测 | 常规 | 邝振华 | T-406/402 |
+| W8-ENGQ | 2026-08-06 | 邝振华 | 工程化收敛：pyproject 显式 `[tool.ruff.lint]` 规则集（此前缺失）+ 全量修复 321 项（UP045/UP017/F401/I001/BLE001 等）、DTZ011 业务日历日统一 Asia/Shanghai 时区（新增 `app/core/timeutil.py`）、JWT/BLE001 精确捕获、alembic 0001/0002/scripts 目录同清；新增迁移契约测试 22 项（模型=0002 迁移字段/类型/回滚）；测试 290→314 | 标准 | - | T-702 |
 
 ### 3.2 文档版本变更汇总
 
