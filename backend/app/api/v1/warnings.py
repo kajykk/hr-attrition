@@ -1,5 +1,5 @@
 """预警路由（D05 3.4 + D04 4.3 状态机转换 + W4 申诉/标记）."""
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,7 +11,10 @@ from app.core.logging import get_logger
 from app.core.tenant import get_current_tenant_id
 from app.db.session import get_db
 from app.models.user import (
-    ROLE_ADMIN, ROLE_HRBP, ROLE_HR_MANAGER, User,
+    ROLE_ADMIN,
+    ROLE_HR_MANAGER,
+    ROLE_HRBP,
+    User,
 )
 from app.models.warning import WarningEvent, WarningRecord
 from app.schemas.warning import (
@@ -26,6 +29,7 @@ from app.services.audit_service import append_audit_log
 from app.services.warning_service import WarningService
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 # 预警处理角色（状态转换/标记）：HR 经理 / HRBP / 管理员
 _HR_ROLES = (ROLE_ADMIN, ROLE_HR_MANAGER, ROLE_HRBP)
@@ -155,7 +159,7 @@ async def update_warning_status(
         to_status=to_status,
         operator_id=operator_id,
         comment=payload.comment,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db.add(event)
     await db.flush()
@@ -221,7 +225,7 @@ async def appeal_warning(
         to_status=to_status,
         operator_id=operator_id,
         comment=comment,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db.add(event)
     await db.flush()
@@ -275,7 +279,7 @@ async def mark_warning(
         to_status=w.status,  # 状态不变
         operator_id=user.id,  # 操作人从认证用户派生（防审计伪造）
         comment=comment,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db.add(event)
     await db.flush()

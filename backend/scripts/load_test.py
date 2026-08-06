@@ -16,23 +16,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import statistics
 import sys
 import time
 from pathlib import Path
 
-# 让 backend/ 在 sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-# 抑制 httpx INFO 日志（避免 6000 行请求日志刷屏）
-import logging
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
 import httpx
 from httpx import ASGITransport
 
-from app.main import app
+# 让 backend/ 在 sys.path（app.main 依赖）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# 抑制 httpx INFO 日志（避免 6000 行请求日志刷屏）
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+from app.main import app  # noqa: E402 - 需先注入 sys.path
 
 # ===== 配置 =====
 CONCURRENT_USERS = 100  # P-PERF-05 目标
@@ -51,7 +50,7 @@ async def _hit(client: httpx.AsyncClient, path: str) -> tuple[bool, float, int]:
         r = await client.get(path, timeout=10.0)
         elapsed = time.perf_counter() - t0
         return r.status_code == 200, elapsed, r.status_code
-    except Exception:
+    except Exception:  # noqa: BLE001 - 压测语义：任何异常计为失败请求
         elapsed = time.perf_counter() - t0
         return False, elapsed, 0
 

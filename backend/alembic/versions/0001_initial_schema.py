@@ -8,9 +8,10 @@ HRA 初始 schema（8 张表）：
   tenants / users / departments / employees /
   risk_predictions / warnings / warning_events / audit_logs
 """
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "0001"
 down_revision = None

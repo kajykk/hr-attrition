@@ -13,8 +13,16 @@ import warnings
 # 屏蔽 SDV / shap 等库的 UserWarning 噪声（不影响逻辑）
 warnings.filterwarnings("ignore", category=UserWarning)
 
-from app.ml import data_generation, feature_engineering, train_structured, train_behavior
-from app.ml import fusion_engine, shap_explainer, fairness_test
+# filterwarnings 必须先于 SDV/shap 等重依赖导入执行
+from app.ml import (  # noqa: E402
+    data_generation,
+    fairness_test,
+    feature_engineering,
+    fusion_engine,
+    shap_explainer,
+    train_behavior,
+    train_structured,
+)
 
 
 def _banner(title: str) -> None:
@@ -29,7 +37,7 @@ def run_pipeline() -> dict:
 
     # 1. 数据生成
     _banner("[1/7] T-301 数据生成")
-    structured, behavior = data_generation.generate_all()
+    structured, _ = data_generation.generate_all()
     summary["attrition_rate"] = float(structured["Attrition"].eq("Yes").mean())
     summary["n_rows"] = len(structured)
 

@@ -1,8 +1,7 @@
 """应用配置 - 基于 pydantic-settings 从环境变量加载（参考 D10 2.2）."""
 from functools import lru_cache
-from typing import List
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,8 +64,28 @@ class Settings(BaseSettings):
     def _validate_cors(cls, v: str) -> str:
         return v or "http://localhost:5173"
 
+    @model_validator(mode="after")
+    def _reject_placeholder_secrets_in_prod(self):
+        """生产环境拒绝默认占位密钥（P0-3）.
+
+        若 APP_ENV=production 但 JWT_SECRET / PII_FERNET_KEY 仍为默认占位值，
+        直接抛错拒绝启动，避免用弱密钥上线。
+        """
+        if self.APP_ENV == "production":
+            defaults = [
+                ("JWT_SECRET", "change-me-64-char-random-secret-please-generate-securely"),
+                ("PII_FERNET_KEY", "change-me-generate-fernet-key"),
+            ]
+            for field_name, default in defaults:
+                value = getattr(self, field_name)
+                if value == default or not value:
+                    raise ValueError(
+                        f"生产环境必须为 {field_name} 配置强随机密钥（当前为默认占位值）"
+                    )
+        return self
+
     @property
-    def cors_origins_list(self) -> List[str]:
+    def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
     @property

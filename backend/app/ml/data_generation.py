@@ -10,11 +10,13 @@ IBM HR 公开数据集下载失败，改为合成生成。
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from app.core.timeutil import today
 
 # ===== 路径（统一用 pathlib，所有产物落在 E: 盘项目内）=====
 BACKEND_ROOT = Path(__file__).resolve().parents[2]  # app/ml/x.py -> backend
@@ -214,10 +216,10 @@ def _add_audit_and_label(df: pd.DataFrame, rng: np.random.Generator) -> pd.DataF
     disability = rng.choice([0, 1], n, p=[0.95, 0.05])
 
     # birth_date 与 Age 一致：约 Age 年前出生
-    today = date.today()
+    today_d = today()
     birth_date = []
     for age in df["Age"].to_numpy():
-        year = today.year - int(age)
+        year = today_d.year - int(age)
         month = int(rng.integers(1, 13))
         day = int(rng.integers(1, 28))
         birth_date.append(date(year, month, day).isoformat())

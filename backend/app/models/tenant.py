@@ -1,8 +1,7 @@
 """租户表 ORM（参考 D04 3.1 tenants）."""
 import uuid
-from datetime import datetime
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 

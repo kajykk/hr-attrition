@@ -1,5 +1,5 @@
 """管理员 schemas - Kill Switch / 漂移检测 / 公平性监测（D03 4.5 + D10 7.3）."""
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -8,9 +8,9 @@ class KillSwitchStatus(BaseModel):
     """Kill Switch 当前状态."""
 
     active: bool
-    reason: Optional[str] = ""
-    activated_at: Optional[str] = ""
-    activated_by: Optional[str] = ""
+    reason: str | None = ""
+    activated_at: str | None = ""
+    activated_by: str | None = ""
 
     model_config = {"protected_namespaces": ()}
 

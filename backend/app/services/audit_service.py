@@ -7,8 +7,7 @@
 """
 import hashlib
 import json
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -37,12 +36,12 @@ async def append_audit_log(
     tenant_id: UUID,
     action: str,
     resource_type: str,
-    user_id: Optional[UUID] = None,
-    resource_id: Optional[UUID] = None,
-    before_value: Optional[dict] = None,
-    after_value: Optional[dict] = None,
-    ip: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    user_id: UUID | None = None,
+    resource_id: UUID | None = None,
+    before_value: dict | None = None,
+    after_value: dict | None = None,
+    ip: str | None = None,
+    user_agent: str | None = None,
 ) -> AuditLog:
     """追加审计日志（自动维护哈希链）.
 
@@ -62,7 +61,7 @@ async def append_audit_log(
     last_log = result.scalar_one_or_none()
     prev_hash = last_log.current_hash if last_log else GENESIS_HASH
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "tenant_id": str(tenant_id),
         "user_id": str(user_id) if user_id else None,

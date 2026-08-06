@@ -109,6 +109,7 @@ async def health() -> dict:
         components["database"] = "degraded"
 
     # Redis 探测
+    redis_ok = False
     try:
         from app.core.redis import get_redis
 
@@ -118,11 +119,25 @@ async def health() -> dict:
         else:
             await redis.ping()
             components["redis"] = "healthy"
+            redis_ok = True
     except Exception as e:  # noqa: BLE001
         logger.warning("健康检查：Redis 探测失败 | err=%s", e)
         components["redis"] = "degraded"
 
-    components["celery"] = "healthy"
+    # Celery 探测（P2-11：从 Redis 心跳 key 判断 worker/beat 存活度）
+    if not redis_ok:
+        components["celery"] = "not_configured"
+    else:
+        try:
+            from app.core.celery_heartbeat import is_heartbeat_fresh
+            from app.core.kill_switch import _get_sync_redis
+
+            fresh = is_heartbeat_fresh(_get_sync_redis())
+            components["celery"] = "healthy" if fresh else "degraded"
+        except Exception as e:  # noqa: BLE001
+            logger.warning("健康检查：Celery 心跳探测失败 | err=%s", e)
+            components["celery"] = "degraded"
+
     components["llm"] = "healthy" if settings.DASHSCOPE_API_KEY else "not_configured"
 
     status = "healthy" if all(v == "healthy" for v in components.values() if v != "not_configured") else "degraded"

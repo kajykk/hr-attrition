@@ -120,7 +120,7 @@ def run_fairness_test() -> dict:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
     print(f"[T-308] 公平性测试（阈值 {final_threshold}，缓解={mitigated}）：")
-    for name, info in final_report.items():
+    for info in final_report.values():
         flag = "达标" if info["passed"] else "未达标"
         print(f"       {info['label']:<22} 偏差={info['parity_difference']:.4f}  [{flag}]")
     print(f"[T-308] 最大偏差 {final_max_parity:.4f}（目标 < {PARITY_MAX}，"

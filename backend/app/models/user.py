@@ -1,9 +1,8 @@
 """用户表 ORM - RBAC 5 角色（参考 D04 3.1 users + D03 6.1）."""
-import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, func
-from sqlalchemy.dialects.postgresql import INET, UUID
+from sqlalchemy import DateTime, Integer, String
+from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin, UUIDPKMixin

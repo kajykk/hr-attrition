@@ -13,9 +13,8 @@ PII 加密清单（D04 3.1）：
 from __future__ import annotations
 
 import hashlib
-from typing import Optional
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -23,7 +22,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 # 模块级 Fernet 单例（懒加载，避免导入时立即校验密钥）
-_fernet: Optional[Fernet] = None
+_fernet: Fernet | None = None
 
 
 def _get_fernet() -> Fernet:
@@ -63,11 +62,7 @@ def decrypt(ciphertext: str) -> str:
             此处不吞异常，便于上层精确处理）。
     """
     f = _get_fernet()
-    try:
-        return f.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
-    except (InvalidToken, ValueError):
-        # 兼容旧密钥轮换场景，调用方应捕获并处理
-        raise
+    return f.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
 
 
 def hash_field(plaintext: str) -> str:

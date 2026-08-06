@@ -27,7 +27,6 @@ from app.models.warning import (
 from app.services.risk_service import RiskService
 from app.services.warning_service import WarningService
 
-
 # ===== 测试用 Employee 替身（避免依赖 DB） =====
 
 
@@ -41,6 +40,27 @@ class _FakeEmployee:
     salary_percentile: Decimal | None = None
     position: str | None = None
     level: str | None = None
+    # ===== P0-4 真实特征字段（可空 → 特征层回退训练分布占位） =====
+    distance_from_home: int | None = None
+    education: int | None = None
+    environment_satisfaction: int | None = None
+    job_involvement: int | None = None
+    job_level: int | None = None
+    job_satisfaction: int | None = None
+    num_companies_worked: int | None = None
+    percent_salary_hike: int | None = None
+    performance_rating: int | None = None
+    relationship_satisfaction: int | None = None
+    stock_option_level: int | None = None
+    total_working_years: int | None = None
+    training_times_last_year: int | None = None
+    work_life_balance: int | None = None
+    years_in_current_role: int | None = None
+    years_since_last_promotion: int | None = None
+    years_with_curr_manager: int | None = None
+    overtime: bool | None = None
+    business_travel: str | None = None
+    marital_status: str | None = None
 
 
 def _make_employee() -> _FakeEmployee:
@@ -75,17 +95,49 @@ def test_feature_provider_deterministic_same_employee():
 
 
 def test_feature_provider_different_employees_differ():
-    """不同员工生成的特征应不同（种子不同）."""
+    """真实字段值不同的员工生成的特征应不同（真实字段优先）."""
     from app.ml.feature_provider import build_features
 
     emp1 = _make_employee()
     emp2 = _make_employee()  # 不同 uuid
+    emp2.distance_from_home = 12
     s1, _ = build_features(emp1)
     s2, _ = build_features(emp2)
 
-    # 至少有一些特征值不同（极小概率完全相同）
+    # 至少有一些结构化特征值不同（反映真实字段差异）
     diff_count = (s1.iloc[0] != s2.iloc[0]).sum()
-    assert diff_count > 0, "不同员工特征完全相同（违反种子策略）"
+    assert diff_count > 0, "结构化特征未反映真实字段差异（违反真实字段优先）"
+
+
+def test_feature_provider_no_random_from_id():
+    """P0-4：结构化特征不依赖员工 ID 随机种子（相同真实数据 → 完全相同）."""
+    import pandas as pd
+
+    from app.ml.feature_provider import build_structured_features
+
+    emp1 = _make_employee()
+    emp2 = _make_employee()  # 不同 uuid、相同真实数据
+    pd.testing.assert_frame_equal(
+        build_structured_features(emp1), build_structured_features(emp2)
+    )
+
+
+def test_feature_provider_real_field_priority_and_default():
+    """P0-4：真实字段优先；缺失字段回退训练分布占位常量."""
+    from app.ml.feature_provider import build_structured_features
+
+    # 缺失全部真实字段 → 占位默认值（不随 uuid 变化）
+    for _ in range(3):
+        assert (build_structured_features(_make_employee()).iloc[0] ==
+                build_structured_features(_make_employee()).iloc[0]).all()
+
+    # 显式提供真实值 → 使用真实值（无随机）
+    emp = _make_employee()
+    emp.distance_from_home = 4
+    emp.job_satisfaction = 1
+    df = build_structured_features(emp)
+    assert int(df.iloc[0]["DistanceFromHome"]) == 4
+    assert int(df.iloc[0]["JobSatisfaction"]) == 1
 
 
 def test_feature_provider_structured_columns_order():
@@ -308,8 +360,8 @@ _skip_if_no_models = pytest.mark.skipif(
 @_skip_if_no_models
 def test_fusion_engine_predict_returns_valid_score():
     """FusionEngine.predict 应返回 0-100 的 risk_score 与合法 level."""
-    from app.ml.fusion_engine import FusionEngine
     from app.ml.feature_provider import build_features
+    from app.ml.fusion_engine import FusionEngine
 
     emp = _make_employee()
     structured, behavior = build_features(emp)

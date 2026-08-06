@@ -9,7 +9,8 @@
 OpenAI 路径默认禁用（OPENAI_ENABLED=false），需数据出境评估通过后启用。
 """
 import asyncio
-from typing import AsyncGenerator, Optional
+import json
+from collections.abc import AsyncGenerator
 
 import httpx
 
@@ -106,11 +107,12 @@ class LLMService:
         model_name = settings.LLM_PRIMARY
 
         # 尝试通义千问 Max（DashScope 兼容 OpenAI 协议）
+        # 精确捕获外部 LLM 边界可预期异常：HTTP 传输 / 响应 JSON 解析 / 配置缺失
         try:
             async for chunk in cls._call_dashscope_sse(prompt, model_name):
                 yield chunk
             return
-        except Exception as e:
+        except (httpx.HTTPError, json.JSONDecodeError, RuntimeError) as e:
             logger.warning("通义千问 Max 调用失败，尝试备用 LLM: %s", e)
 
         # 备用：DeepSeek-V3
@@ -119,7 +121,7 @@ class LLMService:
                 async for chunk in cls._call_dashscope_sse(prompt, settings.LLM_FALLBACK):
                     yield chunk
                 return
-            except Exception as e:
+            except (httpx.HTTPError, json.JSONDecodeError, RuntimeError) as e:
                 logger.warning("备用 LLM 调用失败，降级规则模板: %s", e)
 
         # 最终降级：规则模板（D03 4.4）
@@ -153,30 +155,28 @@ class LLMService:
             "stream": True,
         }
 
-        async with httpx.AsyncClient(timeout=settings.LLM_TIMEOUT) as client:
-            async with client.stream(
-                "POST",
-                f"{DASHSCOPE_BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        yield {"done": True}
-                        return
-                    try:
-                        import json
-
-                        obj = json.loads(data)
-                        choices = obj.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {})
-                            content = delta.get("content")
-                            if content:
-                                yield {"chunk": content}
-                    except Exception:
-                        continue
+        async with httpx.AsyncClient(timeout=settings.LLM_TIMEOUT) as client, client.stream(
+            "POST",
+            f"{DASHSCOPE_BASE_URL}/chat/completions",
+            headers=headers,
+            json=payload,
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    yield {"done": True}
+                    return
+                try:
+                    obj = json.loads(data)
+                    choices = obj.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            yield {"chunk": content}
+                except json.JSONDecodeError:
+                    logger.debug("SSE 行 JSON 解析失败，跳过: %r", data)
+                    continue

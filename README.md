@@ -6,7 +6,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-async-009688)](https://fastapi.tiangolo.com/)
 [![Vue 3](https://img.shields.io/badge/Vue_3+TS-Vite-42b883)](https://vuejs.org/)
 [![ML](https://img.shields.io/badge/LightGBM+SHAP-ML-ff69b4)](https://lightgbm.readthedocs.io/)
-[![Tests](https://img.shields.io/badge/Tests-288+-green)](backend/tests)
+[![Tests](https://img.shields.io/badge/Tests-314+-green)](backend/tests)
 
 ---
 
@@ -20,12 +20,13 @@
 |---|---|
 | **多模态融合预测** | 结构化（LightGBM，AUC 0.9353）+ 行为时序（IsolationForest）融合评分（0.7 / 0.3），**测试 AUC 0.9862**，Top-20% 离职召回 0.8832 |
 | **可解释 AI** | SHAP TreeExplainer 个体预测 Top-3 归因（方向 + 贡献值），30 天全局 Top-10 特征画像，特征契约校验（推理与训练特征一致性） |
+| **特征真实性** | 推理侧 20 项结构化特征**真实字段优先**（HR 采集），缺失回退训练分布中位/众数常量——**无任何随机注入**，预测结果仅由真实数据决定（0002 迁移） |
 | **分级预警闭环** | P0/P1/P2 三级预警 + 状态机（new→confirmed→review→fixing→closed / appealing），24h/48h/72h 升级机制，P0 强制处置路径 |
 | **模型治理** | PSI/KL 逐特征漂移检测（0.1/0.2 阈值）；性别/年龄/民族/残障**四维公平性监测**（差异 >8% 自动触发）；Kill Switch 一键熔断降级（返回安全基线预测） |
 | **隐私与合规** | Fernet **字段级加密**（姓名/身份证/手机号/薪资等 6 字段）+ SHA256 检索哈希 + 季度密钥轮换；PIPL 数据保留清理（离职 ≥2 年自动清除）；AI 提示词 PII 脱敏 |
 | **安全体系** | RBAC 五角色（admin / hr_manager / hrbp / manager / employee）+ 管理员**强制 TOTP 2FA**、登录限流（5/min）、SHA256 审计哈希链 |
 | **实时与 AI** | WebSocket 实时风险推送（租户隔离）；AI 留存建议 SSE 流式输出（Qwen-Max → DeepSeek → 规则模板三级回退） |
-| **工程化** | 288+ 测试用例、多租户行级隔离、Alembic 迁移、Celery Beat 定时治理任务、Prometheus + Grafana + Loki 可观测、JSON 结构化日志全链路追踪 |
+| **工程化** | 314+ 测试用例、多租户行级隔离、Alembic 迁移、Celery Beat 定时治理任务、Prometheus + Grafana + Loki 可观测、JSON 结构化日志全链路追踪 |
 
 ## 模型效果（测试集 10,000 条）
 

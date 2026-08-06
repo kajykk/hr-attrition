@@ -14,15 +14,18 @@
 
 非法转换抛出 ValueError，便于测试与上层 API 捕获返回 422。
 """
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
+from typing import ClassVar
 from uuid import UUID
 
 from app.models.warning import (
     ALLOWED_TRANSITIONS,
-    LEVEL_P0, LEVEL_P1, LEVEL_P2,
-    STATUS_APPEALING, STATUS_CLOSED, STATUS_CONFIRMED,
-    STATUS_FIXING, STATUS_NEW, STATUS_REVIEW,
+    LEVEL_P0,
+    LEVEL_P1,
+    LEVEL_P2,
+    STATUS_CLOSED,
+    STATUS_CONFIRMED,
+    STATUS_FIXING,
 )
 
 
@@ -34,7 +37,7 @@ class WarningService:
 
     # ===== 等级 → 状态限制 =====
     # P0 高级预警：confirmed 后必须先进 review（HR 经理复核），不可直转 fixing
-    P0_FORBIDDEN_FROM_CONFIRMED = {STATUS_FIXING}
+    P0_FORBIDDEN_FROM_CONFIRMED: ClassVar[set[str]] = {STATUS_FIXING}
     # P1/P2：confirmed 可直转 fixing（review 非强制）
 
     @classmethod
@@ -83,7 +86,7 @@ class WarningService:
         warning,
         target_status: str,
         operator_id: UUID,
-        comment: Optional[str] = None,
+        comment: str | None = None,
     ) -> tuple[str, str]:
         """执行状态转换（in-place 修改 warning.status，返回 from/to 供事件记录）.
 
@@ -107,7 +110,7 @@ class WarningService:
 
         # 执行转换
         warning.status = target_status
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # 时间戳维护
         if target_status == STATUS_CONFIRMED:
@@ -132,7 +135,7 @@ class WarningService:
         return base
 
     @staticmethod
-    def level_from_score(risk_score: int, prev_score: Optional[int] = None) -> str:
+    def level_from_score(risk_score: int, prev_score: int | None = None) -> str:
         """根据风险分判定预警等级（D04 4.2）.
 
         P0: risk_score >= 80

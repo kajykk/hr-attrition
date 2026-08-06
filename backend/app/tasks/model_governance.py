@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -70,6 +70,20 @@ def _load_current_from_csv() -> pd.DataFrame | None:
         return None
 
 
+@celery_app.task(name="app.tasks.model_governance.worker_heartbeat")
+def worker_heartbeat() -> dict:
+    """Celery 心跳任务（每 5 分钟）.
+
+    写入 Redis `celery:heartbeat` 时间戳，供 /health 探测 worker/beat 存活度
+    （P2-11：原先 health 端点 celery 状态为硬编码）。
+    """
+    from app.core.celery_heartbeat import write_heartbeat
+    from app.core.kill_switch import _get_sync_redis
+
+    write_heartbeat(_get_sync_redis())
+    return {"status": "ok", "checked_at": datetime.now(UTC).isoformat()}
+
+
 @celery_app.task(name="app.tasks.model_governance.detect_drift")
 def detect_drift() -> dict:
     """漂移检测任务（每日 02:00）.
@@ -83,14 +97,14 @@ def detect_drift() -> dict:
     Returns:
         {status: "ok"/"skipped", max_psi, critical_features, checked_at, ...}
     """
-    logger.info("漂移检测任务执行 | time=%s", datetime.now(timezone.utc).isoformat())
+    logger.info("漂移检测任务执行 | time=%s", datetime.now(UTC).isoformat())
 
     baseline = _load_baseline()
     if baseline is None:
         return {
             "status": "skipped",
             "reason": "基线数据不可用",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     current = _load_current_from_csv()
@@ -98,7 +112,7 @@ def detect_drift() -> dict:
         return {
             "status": "skipped",
             "reason": "当前分布数据不可用",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     # 取交集列（避免列不一致）
@@ -107,7 +121,7 @@ def detect_drift() -> dict:
         return {
             "status": "skipped",
             "reason": "无共同特征列可检测",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     try:
@@ -117,7 +131,7 @@ def detect_drift() -> dict:
         return {
             "status": "skipped",
             "reason": f"计算异常: {e}",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     # 任何 critical → log warning
@@ -138,7 +152,7 @@ def detect_drift() -> dict:
             for f in summary.get("features", [])
         ],
         "summary": summary["summary"],
-        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -155,7 +169,7 @@ def fairness_daily_report() -> dict:
     Returns:
         {status, max_deviation, dimensions, kill_switch_activated}
     """
-    logger.info("公平性日报任务执行 | time=%s", datetime.now(timezone.utc).isoformat())
+    logger.info("公平性日报任务执行 | time=%s", datetime.now(UTC).isoformat())
 
     # 加载公平性数据（含 risk_score + 审计字段）
     try:
@@ -164,7 +178,7 @@ def fairness_daily_report() -> dict:
             return {
                 "status": "skipped",
                 "reason": "公平性数据文件不存在",
-                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "checked_at": datetime.now(UTC).isoformat(),
             }
         df = pd.read_csv(_FAIRNESS_DATA_PATH)
     except Exception as e:  # noqa: BLE001
@@ -172,7 +186,7 @@ def fairness_daily_report() -> dict:
         return {
             "status": "skipped",
             "reason": f"数据加载失败: {e}",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     # 计算各维度偏差
@@ -181,7 +195,7 @@ def fairness_daily_report() -> dict:
         return {
             "status": "skipped",
             "reason": "无可用维度",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     max_deviation = max(d["parity_difference"] for d in dimensions.values())
@@ -216,7 +230,7 @@ def fairness_daily_report() -> dict:
         "kill_switch_activated": kill_switch_activated,
         "warning_threshold": FAIRNESS_WARNING_THRESHOLD,
         "critical_threshold": FAIRNESS_CRITICAL_THRESHOLD,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -283,7 +297,7 @@ def auto_rollback() -> dict:
 
     注意：完整连续天数追踪需持久化存储，此处用简化逻辑（检测当前状态）。
     """
-    logger.info("自动回滚检查任务执行 | time=%s", datetime.now(timezone.utc).isoformat())
+    logger.info("自动回滚检查任务执行 | time=%s", datetime.now(UTC).isoformat())
 
     try:
         drift_result = detect_drift()
@@ -293,7 +307,7 @@ def auto_rollback() -> dict:
             "status": "skipped",
             "reason": f"漂移检测失败: {e}",
             "rolled_back": False,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     if drift_result.get("status") != "ok":
@@ -301,7 +315,7 @@ def auto_rollback() -> dict:
             "status": "skipped",
             "reason": drift_result.get("reason", "漂移检测未执行"),
             "rolled_back": False,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     critical_features = drift_result.get("critical_features", [])
@@ -322,7 +336,7 @@ def auto_rollback() -> dict:
             "rolled_back": True,
             "reason": f"漂移严重 max_psi={max_psi:.4f}，触发回滚",
             "critical_features": critical_features,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     return {
@@ -330,5 +344,5 @@ def auto_rollback() -> dict:
         "rolled_back": False,
         "max_psi": max_psi,
         "critical_features": critical_features,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_at": datetime.now(UTC).isoformat(),
     }

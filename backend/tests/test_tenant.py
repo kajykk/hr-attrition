@@ -21,9 +21,7 @@ from app.core.tenant import (
     get_tenant_context,
     require_tenant_header,
     set_tenant_context,
-    tenant_context,
 )
-
 
 # ============================================================
 # 1. TenantContext dataclass 测试

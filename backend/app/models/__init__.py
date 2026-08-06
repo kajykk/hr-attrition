@@ -8,12 +8,12 @@ from app.models.user import User
 from app.models.warning import WarningEvent, WarningRecord
 
 __all__ = [
+    "AuditLog",
+    "Department",
+    "Employee",
+    "RiskPrediction",
     "Tenant",
     "User",
-    "Employee",
-    "Department",
-    "WarningRecord",
     "WarningEvent",
-    "RiskPrediction",
-    "AuditLog",
+    "WarningRecord",
 ]

@@ -1,16 +1,14 @@
 """安全模块 - JWT + 密码哈希 + PII Fernet 字段级加密（ADR-007）."""
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
-
-from cryptography.fernet import Fernet, InvalidToken
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-
-from app.core.config import settings
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 # ===== 密码哈希（bcrypt + salt） =====
 # passlib 与 bcrypt 5.x 不兼容，直接使用 bcrypt 库
 import bcrypt as _bcrypt
+from cryptography.fernet import Fernet, InvalidToken
+from jose import jwt
+
+from app.core.config import settings
 
 
 def hash_password(password: str) -> str:
@@ -29,10 +27,10 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # ===== JWT（access 30min / refresh 7d，参考 D03 6.1） =====
 def create_access_token(
-    subject: str, tenant_id: str, role: str, extra: Optional[dict] = None
+    subject: str, tenant_id: str, role: str, extra: dict | None = None
 ) -> str:
     """创建 access token."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": subject,
         "tenant_id": tenant_id,
@@ -48,7 +46,7 @@ def create_access_token(
 
 def create_refresh_token(subject: str, tenant_id: str) -> str:
     """创建 refresh token."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "sub": subject,
         "tenant_id": tenant_id,
@@ -66,7 +64,7 @@ def decode_token(token: str) -> dict:
 
 # ===== PII Fernet 字段级加密（ADR-007） =====
 # 复用 DWS pii_crypto.py 思路：Fernet 对称加密，密钥季度轮换
-_fernet: Optional[Fernet] = None
+_fernet: Fernet | None = None
 
 
 def _get_fernet() -> Fernet:
@@ -78,7 +76,7 @@ def _get_fernet() -> Fernet:
     return _fernet
 
 
-def encrypt_pii(plaintext: Optional[str]) -> Optional[str]:
+def encrypt_pii(plaintext: str | None) -> str | None:
     """PII 字段加密：返回 Fernet token 字符串。None 输入返回 None."""
     if plaintext is None:
         return None
@@ -86,7 +84,7 @@ def encrypt_pii(plaintext: Optional[str]) -> Optional[str]:
     return f.encrypt(plaintext.encode("utf-8")).decode("utf-8")
 
 
-def decrypt_pii(ciphertext: Optional[str]) -> Optional[str]:
+def decrypt_pii(ciphertext: str | None) -> str | None:
     """PII 字段解密。None 输入返回 None；非法 token 返回 None."""
     if ciphertext is None:
         return None
@@ -97,7 +95,7 @@ def decrypt_pii(ciphertext: Optional[str]) -> Optional[str]:
         return None
 
 
-def pii_hash(plaintext: Optional[str]) -> Optional[str]:
+def pii_hash(plaintext: str | None) -> str | None:
     """PII 字段哈希（SHA256，用于检索索引，参考 D04 3.1 name_hash 字段）."""
     if plaintext is None:
         return None

@@ -1,8 +1,8 @@
 """SQLAlchemy DeclarativeBase + 通用 mixin（参考 D04 1.1 审计字段统一）."""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -10,7 +10,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 class Base(DeclarativeBase):
     """所有 ORM 模型的基类."""
 
-    pass
 
 
 class TimestampMixin:

@@ -15,7 +15,16 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -67,6 +76,33 @@ class Employee(Base, UUIDPKMixin, TenantMixin, TimestampMixin, SoftDeleteMixin):
     hire_date: Mapped[date] = mapped_column(Date, nullable=False, comment="入职日期")
     salary_percentile: Mapped[Decimal | None] = mapped_column(
         Numeric(5, 2), nullable=True, comment="薪资分位（0-100）"
+    )
+
+    # ===== 模型特征真实字段（P0-4：真实值优先，缺失时推理侧用训练分布中位占位） =====
+    # 与 STRUCTURED_FEATURE_COLUMNS 对应，可选采集；均为推理输入，不含受保护属性。
+    distance_from_home: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="通勤距离（公里）")
+    education: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="教育程度 1-5")
+    environment_satisfaction: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="环境满意度 1-4")
+    job_involvement: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="工作投入度 1-4")
+    job_level: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="职级档位 1-5")
+    job_satisfaction: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="工作满意度 1-4")
+    num_companies_worked: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="曾任职公司数")
+    percent_salary_hike: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最近调薪幅度 %")
+    performance_rating: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="绩效评级 3-4")
+    relationship_satisfaction: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="关系满意度 1-4")
+    stock_option_level: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="期权等级 0-3")
+    total_working_years: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="总工作年限")
+    training_times_last_year: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="年度培训次数")
+    work_life_balance: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="工作生活平衡 1-4")
+    years_in_current_role: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="当前岗位年限")
+    years_since_last_promotion: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="距上次晋升年限")
+    years_with_curr_manager: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="直属上级共事年限")
+    overtime: Mapped[bool | None] = mapped_column(Boolean, nullable=True, comment="是否经常加班")
+    business_travel: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, comment="出差频率：Non-Travel/Travel_Rarely/Travel_Frequently"
+    )
+    marital_status: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, comment="婚姻状况：Single/Married/Divorced"
     )
 
     # ===== 状态 =====

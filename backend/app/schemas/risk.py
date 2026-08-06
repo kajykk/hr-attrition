@@ -1,6 +1,5 @@
 """风险预测 schemas（参考 D05 3.3）."""
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -32,10 +31,10 @@ class RiskPredictionOut(BaseModel):
 class ShapFactor(BaseModel):
     feature: str
     display_name: str
-    value: Optional[float] = None
+    value: float | None = None
     contribution: float
     direction: str = Field(description="positive/negative")
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class ShapExplanationOut(BaseModel):

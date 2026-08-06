@@ -1,6 +1,5 @@
 """异步数据库 session（async sessionmaker + get_db 依赖）."""
 from collections.abc import AsyncGenerator
-from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 

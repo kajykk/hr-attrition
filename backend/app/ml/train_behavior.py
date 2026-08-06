@@ -32,7 +32,6 @@ def train() -> dict:
     data = load_split()
 
     X_train = data["X_behav_train"]
-    X_val = data["X_behav_val"]
     X_test = data["X_behav_test"]
     y_train = data["y_train"]
     y_test = data["y_test"]

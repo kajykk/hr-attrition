@@ -12,13 +12,13 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+from jose import JWTError
 
 from app.core.logging import get_logger
 from app.core.security import decode_token
-from app.core.tenant import set_tenant_context, TenantContext, clear_tenant_context
+from app.core.tenant import TenantContext, clear_tenant_context, set_tenant_context
 
 logger = get_logger(__name__)
 
@@ -74,7 +74,7 @@ async def broadcast_risk_update(tenant_id: str, message: dict) -> None:
 
 
 @router.websocket("/ws/risk")
-async def risk_websocket(websocket: WebSocket, token: Optional[str] = None):
+async def risk_websocket(websocket: WebSocket, token: str | None = None):
     """实时风险推送 WebSocket 端点.
 
     连接时需带 JWT token（query param `token=`），解析 token 获取 tenant_id。
@@ -90,7 +90,7 @@ async def risk_websocket(websocket: WebSocket, token: Optional[str] = None):
 
     try:
         payload = decode_token(token)
-    except Exception:
+    except JWTError:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="token 无效或已过期")
         return
 

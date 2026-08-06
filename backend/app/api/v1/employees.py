@@ -1,5 +1,4 @@
 """员工路由（D05 3.2 + 3.10 离职标记）."""
-from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -13,9 +12,12 @@ from app.db.session import get_db
 from app.models.department import Department
 from app.models.employee import Employee
 from app.models.risk_prediction import RiskPrediction
-from app.models.user import ROLE_ADMIN, ROLE_HRBP, ROLE_HR_MANAGER, ROLE_MANAGER, User
+from app.models.user import ROLE_ADMIN, ROLE_HR_MANAGER, ROLE_HRBP, User
 from app.schemas.employee import (
-    EmployeeCreate, EmployeeDetail, EmployeeLeaveUpdate, EmployeeListItem,
+    EmployeeCreate,
+    EmployeeDetail,
+    EmployeeLeaveUpdate,
+    EmployeeListItem,
     PaginatedEmployees,
 )
 
@@ -249,6 +251,27 @@ async def create_employee(
         level=payload.level,
         hire_date=payload.hire_date,
         salary_percentile=payload.salary_percentile,
+        # P0-4 真实特征字段
+        distance_from_home=payload.distance_from_home,
+        education=payload.education,
+        environment_satisfaction=payload.environment_satisfaction,
+        job_involvement=payload.job_involvement,
+        job_level=payload.job_level,
+        job_satisfaction=payload.job_satisfaction,
+        num_companies_worked=payload.num_companies_worked,
+        percent_salary_hike=payload.percent_salary_hike,
+        performance_rating=payload.performance_rating,
+        relationship_satisfaction=payload.relationship_satisfaction,
+        stock_option_level=payload.stock_option_level,
+        total_working_years=payload.total_working_years,
+        training_times_last_year=payload.training_times_last_year,
+        work_life_balance=payload.work_life_balance,
+        years_in_current_role=payload.years_in_current_role,
+        years_since_last_promotion=payload.years_since_last_promotion,
+        years_with_curr_manager=payload.years_with_curr_manager,
+        overtime=payload.overtime,
+        business_travel=payload.business_travel,
+        marital_status=payload.marital_status,
         status="active",
         consent_status="pending",
     )

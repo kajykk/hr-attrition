@@ -16,13 +16,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
 
 from app.celery_app import celery_app
 from app.core.logging import get_logger
+from app.core.timeutil import today
 from app.db.session import async_session_factory
 from app.models.audit_log import AuditLog
 from app.models.employee import Employee
@@ -50,7 +51,7 @@ async def _list_purge_candidates(tenant_id: UUID | None = None) -> list[Employee
       - leave_date <= today - 2 年
       - 该员工无未结申诉预警（warnings.status 不在 _UNCLOSED_WARNING_STATUSES）
     """
-    cutoff_date = date.today() - timedelta(days=RETENTION_YEARS_AFTER_LEAVE * 365)
+    cutoff_date = today() - timedelta(days=RETENTION_YEARS_AFTER_LEAVE * 365)
 
     stmt = (
         select(Employee)
@@ -173,7 +174,7 @@ def purge_departed_employees(tenant_id: str | None = None) -> dict:
             checked_at: ISO8601,
         }
     """
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     logger.info("数据保留清理任务执行 | tenant=%s | time=%s", tenant_id or "ALL", started_at)
 
     try:
@@ -202,7 +203,7 @@ def purge_departed_employees(tenant_id: str | None = None) -> dict:
             "status": "ok",
             "purged_count": 0,
             "details": [],
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     details: list[dict] = []
@@ -222,7 +223,7 @@ def purge_departed_employees(tenant_id: str | None = None) -> dict:
         "details": details,
         "failures": failures,
         "retention_years": RETENTION_YEARS_AFTER_LEAVE,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_at": datetime.now(UTC).isoformat(),
     }
     logger.info(
         "数据保留清理完成 | purged=%d | failed=%d",
@@ -241,8 +242,8 @@ def report_retention_status() -> dict:
       - 已离职满 2 年但有未结申诉（不删除）
       - audit_logs 5 年内总量
     """
-    cutoff_date = date.today() - timedelta(days=RETENTION_YEARS_AFTER_LEAVE * 365)
-    audit_cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_YEARS_WARNINGS * 365)
+    cutoff_date = today() - timedelta(days=RETENTION_YEARS_AFTER_LEAVE * 365)
+    audit_cutoff = datetime.now(UTC) - timedelta(days=RETENTION_YEARS_WARNINGS * 365)
 
     async def _collect() -> dict:
         async with async_session_factory() as session:
@@ -282,7 +283,7 @@ def report_retention_status() -> dict:
         return {
             "status": "skipped",
             "reason": f"DB 不可用: {e}",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     return {
@@ -292,5 +293,5 @@ def report_retention_status() -> dict:
             "employees_years": RETENTION_YEARS_AFTER_LEAVE,
             "audit_logs_years": RETENTION_YEARS_WARNINGS,
         },
-        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_at": datetime.now(UTC).isoformat(),
     }

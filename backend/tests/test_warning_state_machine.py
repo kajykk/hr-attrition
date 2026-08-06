@@ -13,9 +13,15 @@ from uuid import uuid4
 import pytest
 
 from app.models.warning import (
-    LEVEL_P0, LEVEL_P1, LEVEL_P2,
-    STATUS_APPEALING, STATUS_CLOSED, STATUS_CONFIRMED,
-    STATUS_FIXING, STATUS_NEW, STATUS_REVIEW,
+    LEVEL_P0,
+    LEVEL_P1,
+    LEVEL_P2,
+    STATUS_APPEALING,
+    STATUS_CLOSED,
+    STATUS_CONFIRMED,
+    STATUS_FIXING,
+    STATUS_NEW,
+    STATUS_REVIEW,
 )
 from app.services.warning_service import WarningService
 
@@ -67,7 +73,7 @@ def test_p0_confirmed_to_fixing_illegal():
 def test_p0_confirmed_to_review_legal():
     """P0 confirmed → review 合法."""
     w = _FakeWarning(status=STATUS_CONFIRMED, level=LEVEL_P0)
-    from_s, to_s = WarningService.transition(w, STATUS_REVIEW, uuid4())
+    _, to_s = WarningService.transition(w, STATUS_REVIEW, uuid4())
     assert to_s == STATUS_REVIEW
     assert w.status == STATUS_REVIEW
 
@@ -96,7 +102,7 @@ def test_p0_full_path_confirmed_review_fixing():
 def test_p1_confirmed_to_fixing_legal():
     """P1 confirmed → fixing 可直转（无需复核）."""
     w = _FakeWarning(status=STATUS_CONFIRMED, level=LEVEL_P1)
-    from_s, to_s = WarningService.transition(w, STATUS_FIXING, uuid4())
+    _, to_s = WarningService.transition(w, STATUS_FIXING, uuid4())
     assert to_s == STATUS_FIXING
     assert w.status == STATUS_FIXING
 

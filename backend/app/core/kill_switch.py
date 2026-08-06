@@ -12,11 +12,9 @@ Redis 数据结构（Hash）：
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import redis as sync_redis_lib
-import redis.asyncio as aioredis
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -27,10 +25,10 @@ logger = get_logger(__name__)
 _KILL_SWITCH_KEY = "kill_switch:active"
 
 # 同步 Redis 客户端单例（Celery 任务用）
-_sync_redis: Optional[sync_redis_lib.Redis] = None
+_sync_redis: sync_redis_lib.Redis | None = None
 
 
-def _get_sync_redis() -> Optional[sync_redis_lib.Redis]:
+def _get_sync_redis() -> sync_redis_lib.Redis | None:
     """获取同步 Redis 客户端单例.
 
     连接失败返回 None（fail-open，调用方需处理）。
@@ -58,12 +56,12 @@ def _build_payload(active: bool, reason: str, operator_id: str) -> dict:
     return {
         "active": "1" if active else "0",
         "reason": reason,
-        "activated_at": datetime.now(timezone.utc).isoformat(),
+        "activated_at": datetime.now(UTC).isoformat(),
         "activated_by": operator_id,
     }
 
 
-def _parse_status(raw: Optional[str]) -> dict:
+def _parse_status(raw: str | None) -> dict:
     """解析 Redis 中的状态 JSON，返回标准化 dict."""
     default = {
         "active": False,

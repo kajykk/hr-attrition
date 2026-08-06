@@ -1,8 +1,9 @@
 """认证路由（D05 3.1）."""
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,12 +11,19 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.rate_limit import login_limit
 from app.core.security import (
-    create_access_token, create_refresh_token, decode_token, verify_password,
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    verify_password,
 )
 from app.db.session import get_db
 from app.models.user import ROLE_ADMIN, User
 from app.schemas.auth import (
-    LoginRequest, LoginResult, RefreshRequest, RefreshResponse, UserOut,
+    LoginRequest,
+    LoginResult,
+    RefreshRequest,
+    RefreshResponse,
+    UserOut,
 )
 from app.services.audit_service import append_audit_log
 
@@ -104,7 +112,7 @@ async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depe
         raise
 
     # 登录成功：更新 last_login_at + 写审计
-    user.last_login_at = datetime.now(timezone.utc)
+    user.last_login_at = datetime.now(UTC)
     await _log_auth_event(db, user, "auth.login")
     await db.flush()
 
@@ -133,7 +141,7 @@ async def refresh_token(payload: RefreshRequest, db: AsyncSession = Depends(get_
     """
     try:
         decoded = decode_token(payload.refresh_token)
-    except Exception:
+    except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="refresh_token 无效")
 
     if decoded.get("type") != "refresh":

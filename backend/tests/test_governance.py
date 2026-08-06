@@ -11,7 +11,6 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import uuid4
 
 import numpy as np
@@ -28,7 +27,6 @@ from app.ml.drift_detector import (
     detect_drift_summary,
 )
 from app.services.risk_service import RiskService
-
 
 # ===== Fake Redis（用于 kill_switch 流程测试） =====
 
@@ -357,8 +355,6 @@ async def test_risk_service_predict_returns_degraded_when_kill_switch_active(mon
         return True
 
     # 在 risk_service 模块内部导入的位置 patch（动态 import）
-    import sys
-    risk_mod = sys.modules["app.services.risk_service"]
     # patch is_active_async 在 kill_switch 模块
     monkeypatch.setattr(kill_switch, "is_active_async", _mock_active)
 
@@ -403,7 +399,7 @@ async def test_risk_service_predict_kill_switch_check_failure_does_not_block(mon
 
 def test_admin_schemas_kill_switch_status():
     """KillSwitchStatus schema 应正确序列化."""
-    from app.schemas.admin import KillSwitchStatus, KillSwitchAction
+    from app.schemas.admin import KillSwitchAction, KillSwitchStatus
 
     status = KillSwitchStatus(active=True, reason="test", activated_at="2026-01-01T00:00:00Z", activated_by="admin")
     assert status.active is True

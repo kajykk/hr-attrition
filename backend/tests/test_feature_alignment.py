@@ -31,7 +31,8 @@ class _FakeEmp:
 def test_salary_percentile_scale_contract():
     """DB 百分位 100 应换算为模型输入 1.0，50 → 0.5，0 → 0.0（量纲一致）. """
     from app.ml.feature_provider import (
-        SALARY_PERCENTILE_SCALE, _salary_percentile_value,
+        SALARY_PERCENTILE_SCALE,
+        _salary_percentile_value,
     )
 
     assert SALARY_PERCENTILE_SCALE == 0.01

@@ -1,19 +1,19 @@
 """API 依赖：get_current_user / require_role（RBAC 5 角色，D03 6.1）."""
-from typing import Optional
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, status
+from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decode_token
 from app.core.tenant import get_current_tenant_id
 from app.db.session import get_db
-from app.models.user import ALL_ROLES, ROLE_ADMIN, User
+from app.models.user import User
 
 
 async def get_current_user(
-    authorization: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """从 Authorization Bearer token 解析当前用户.
@@ -31,7 +31,7 @@ async def get_current_user(
     token = authorization[7:].strip()
     try:
         payload = decode_token(token)
-    except Exception:
+    except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="JWT 解码失败或已过期",

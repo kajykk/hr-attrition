@@ -6,25 +6,29 @@
   3. build_features(employee) → (structured, behavior) 元组
 
 公平性硬约束：gender/ethnicity/disability/birth_date 永不出现在模型特征中。
-缺失字段使用基于 employee.id 的确定性伪随机生成（hashlib 种子），确保同一员工每次得到相同特征。
+
+P0-4 特征真实化：
+  - 结构化特征改为「真实字段优先」：Employee 模型新增真实特征字段
+    （distance_from_home 等，0002 迁移），非空时直接使用
+  - 缺失（None）时回退为训练分布中位/众数常量（_FEATURE_DEFAULTS），
+    **不再使用确定性伪随机数**，消除"预测由随机数主导"
+  - salary_percentile 统一为 0-1 分位：DB 存 0-100，推理乘 SALARY_PERCENTILE_SCALE
+  - 行为特征：当前无真实行为采集通道，保留特征工程同分布构造（演示模式），
+    生产接入真实时序后应替换为真实数据（见 README 说明）
 
 特征契约（与 T-302 训练侧对齐，防推理/训练定义漂移）：
-  - salary_percentile 统一为 0-1 薪资分位：DB 存 0-100 百分位（EmployeeCreate.ge/le=100），
-    推理时乘以 SALARY_PERCENTILE_SCALE（=0.01）归一；训练侧由部门内 MonthlyIncome 排名计算。
   - 列名与列顺序必须等于训练元数据 feature_metadata.pkl 中 structured_feature_columns。
   一致性由 assert_feature_contract() 校验（P1-5 修复）。
 """
 from __future__ import annotations
 
-import hashlib
 import pickle
-from datetime import date
+import re
 from pathlib import Path
-from typing import Tuple
 
-import numpy as np
 import pandas as pd
 
+from app.core.timeutil import today
 from app.ml.feature_engineering import (
     BEHAVIOR_SERIES,
     DEPARTMENTS,
@@ -39,6 +43,48 @@ SALARY_PERCENTILE_SCALE = 0.01
 _MODELS_DIR = Path(__file__).resolve().parent / "models"
 _FEATURE_METADATA_PATH = _MODELS_DIR / "feature_metadata.pkl"
 _training_metadata_cache: dict | None = None
+
+# ===== P0-4 缺失占位：训练分布中位/众数（IBM 合成训练集典型值） =====
+# 真实字段缺失时使用这些常量，而非随机数，保证确定性 + 贴近训练分布。
+_FEATURE_DEFAULTS: dict[str, object] = {
+    "distance_from_home": 9,
+    "education": 3,
+    "environment_satisfaction": 3,
+    "job_involvement": 3,
+    "job_level": 2,
+    "job_satisfaction": 3,
+    "num_companies_worked": 2,
+    "percent_salary_hike": 14,
+    "performance_rating": 3,
+    "relationship_satisfaction": 3,
+    "stock_option_level": 1,
+    "total_working_years": 10,
+    "training_times_last_year": 2,
+    "work_life_balance": 3,
+    "years_in_current_role": 3,
+    "years_since_last_promotion": 1,
+    "years_with_curr_manager": 3,
+    "overtime": 0,
+    "business_travel": "Travel_Rarely",
+    "marital_status": "Married",
+}
+
+
+def _attr(employee, name, default=None):
+    """读取 ORM 属性，缺失时返回 default（兼容旧对象/测试替身，不抛错）."""
+    return getattr(employee, name, default)
+
+
+def _int_or_default(employee, field_name: str, lo: int, hi: int) -> int:
+    """读取整型特征并钳位到 [lo, hi]；缺失/非法时返回训练分布占位常量."""
+    default = int(_FEATURE_DEFAULTS[field_name])
+    val = _attr(employee, field_name)
+    if val is None:
+        return default
+    try:
+        return min(hi, max(lo, int(val)))
+    except (TypeError, ValueError):
+        return default
 
 
 # ===== 部门名称映射（ORM 无 department 名称，用 position/level 推断） =====
@@ -55,7 +101,7 @@ _POSITION_DEPT_HINTS = {
 
 def _infer_department(employee) -> str:
     """从 employee.position 推断部门名称（用于 one-hot 编码）."""
-    pos = (employee.position or "").lower()
+    pos = (_attr(employee, "position") or "").lower()
     for kw, dept in _POSITION_DEPT_HINTS.items():
         if kw in pos:
             return dept
@@ -63,28 +109,13 @@ def _infer_department(employee) -> str:
     return "Sales"
 
 
-def _infer_marital_status(seed: int) -> str:
-    """基于种子确定性选择婚姻状态."""
-    rng = np.random.RandomState(seed)
-    idx = int(rng.randint(0, len(MARITAL_STATUSES)))
-    return MARITAL_STATUSES[idx]
-
-
-def _deterministic_seed(employee_id) -> int:
-    """从 employee.id 生成稳定的 32 位整数种子（同一员工每次相同）."""
-    raw = str(employee_id).encode("utf-8")
-    h = hashlib.sha256(raw).digest()
-    # 取前 4 字节作为 uint32 种子
-    return int.from_bytes(h[:4], "big") & 0x7FFFFFFF
-
-
 def _age_from_birth(birth_date) -> int:
     """从出生日期计算年龄."""
     if birth_date is None:
         return 35  # 默认中位数
-    today = date.today()
-    age = today.year - birth_date.year
-    if (today.month, today.day) < (birth_date.month, birth_date.day):
+    today_d = today()
+    age = today_d.year - birth_date.year
+    if (today_d.month, today_d.day) < (birth_date.month, birth_date.day):
         age -= 1
     return max(18, min(60, age))
 
@@ -93,9 +124,9 @@ def _years_at_company(hire_date) -> int:
     """从入职日期计算在司年数."""
     if hire_date is None:
         return 5
-    today = date.today()
-    years = today.year - hire_date.year
-    if (today.month, today.day) < (hire_date.month, hire_date.day):
+    today_d = today()
+    years = today_d.year - hire_date.year
+    if (today_d.month, today_d.day) < (hire_date.month, hire_date.day):
         years -= 1
     return max(0, min(40, years))
 
@@ -106,13 +137,51 @@ def _salary_percentile_value(employee) -> float:
     契约：DB 存 0-100 百分位，乘以 SALARY_PERCENTILE_SCALE（0.01）得到与训练侧
     （部门内分位 0-1）同量纲的模型输入。
     """
-    sp = employee.salary_percentile
+    sp = _attr(employee, "salary_percentile")
     if sp is None:
         return 0.5
     try:
         return min(1.0, max(0.0, float(sp) * SALARY_PERCENTILE_SCALE))
     except (TypeError, ValueError):
         return 0.5
+
+
+def _monthly_income(employee) -> float:
+    """月薪：优先解析 salary 加密字段（Fernet 解密后提取数值），失败回退分位估算."""
+    enc = _attr(employee, "salary_encrypted")
+    if enc:
+        try:
+            from app.core.security import decrypt_pii
+
+            plain = decrypt_pii(enc)
+            if plain:
+                m = re.search(r"\d+(?:\.\d+)?", plain)
+                if m:
+                    val = float(m.group(0))
+                    if 1000 <= val <= 1000000:
+                        return val
+        except (ValueError, TypeError):
+            pass
+    # 从分位反推（训练侧 MonthlyIncome 量纲参考）
+    return _salary_percentile_value(employee) * 20000.0
+
+
+def _business_travel_ord(employee) -> int:
+    """出差频率 → 0/1/2（对齐训练侧 BUSINESS_TRAVEL_ORD）."""
+    mapping = {"Non-Travel": 0, "Travel_Rarely": 1, "Travel_Frequently": 2}
+    val = _attr(employee, "business_travel")
+    if val is None:
+        return 1  # 训练分布众数 Travel_Rarely
+    return mapping.get(str(val).strip(), 1)
+
+
+def _marital_status(employee) -> str:
+    """婚姻状况：真实值必须是训练枚举；缺失/非法回退众数 Married."""
+    val = _attr(employee, "marital_status")
+    if val is None:
+        return str(_FEATURE_DEFAULTS["marital_status"])
+    v = str(val)
+    return v if v in MARITAL_STATUSES else str(_FEATURE_DEFAULTS["marital_status"])
 
 
 def load_training_metadata() -> dict | None:
@@ -162,46 +231,47 @@ def assert_feature_contract() -> None:
 def build_structured_features(employee) -> pd.DataFrame:
     """构造单员工的结构化特征 DataFrame（31 列，顺序固定）.
 
+    P0-4：真实字段优先（Employee 新特征字段），缺失时回退训练分布中位常量，
+    不再使用确定性伪随机数。
+
     Args:
         employee: Employee ORM 实例。
 
     Returns:
         单行 DataFrame，列顺序 = STRUCTURED_FEATURE_COLUMNS。
     """
-    seed = _deterministic_seed(employee.id)
-    rng = np.random.RandomState(seed)
-
-    # ===== 派生自 ORM 的字段 =====
-    age = _age_from_birth(employee.birth_date)
-    years_at_company = _years_at_company(employee.hire_date)
+    # ===== 派生自 ORM 的字段（真实可推导） =====
+    age = _age_from_birth(_attr(employee, "birth_date"))
+    years_at_company = _years_at_company(_attr(employee, "hire_date"))
     salary_pct = _salary_percentile_value(employee)
-    monthly_income = salary_pct * 20000.0  # 从分位反推月薪
+    monthly_income = _monthly_income(employee)
 
-    # ===== 确定性伪随机字段（模拟 HR 系统数据快照） =====
-    distance_from_home = int(rng.randint(1, 30))
-    education = int(rng.randint(1, 6))
-    environment_satisfaction = int(rng.randint(1, 5))
-    job_involvement = int(rng.randint(1, 5))
-    job_level = int(rng.randint(1, 6))
-    job_satisfaction = int(rng.randint(1, 5))
-    num_companies_worked = int(rng.randint(0, 10))
-    percent_salary_hike = int(rng.randint(11, 26))
-    performance_rating = int(rng.choice([3, 4]))
-    relationship_satisfaction = int(rng.randint(1, 5))
-    stock_option_level = int(rng.randint(0, 4))
-    total_working_years = int(rng.randint(max(years_at_company, 0), 41))
-    training_times_last_year = int(rng.randint(0, 7))
-    work_life_balance = int(rng.randint(1, 5))
-    years_in_current_role = int(rng.randint(0, min(years_at_company + 1, 19)))
-    years_since_last_promotion = int(rng.randint(0, 16))
-    years_with_curr_manager = int(rng.randint(0, min(years_at_company + 1, 18)))
+    # ===== 真实字段优先，缺失 → 训练分布中位/众数常量 =====
+    distance_from_home = _int_or_default(employee, "distance_from_home", 1, 30)
+    education = _int_or_default(employee, "education", 1, 5)
+    environment_satisfaction = _int_or_default(employee, "environment_satisfaction", 1, 4)
+    job_involvement = _int_or_default(employee, "job_involvement", 1, 4)
+    job_level = _int_or_default(employee, "job_level", 1, 5)
+    job_satisfaction = _int_or_default(employee, "job_satisfaction", 1, 4)
+    num_companies_worked = _int_or_default(employee, "num_companies_worked", 0, 10)
+    percent_salary_hike = _int_or_default(employee, "percent_salary_hike", 11, 25)
+    performance_rating = _int_or_default(employee, "performance_rating", 3, 4)
+    relationship_satisfaction = _int_or_default(employee, "relationship_satisfaction", 1, 4)
+    stock_option_level = _int_or_default(employee, "stock_option_level", 0, 3)
+    total_working_years = _int_or_default(employee, "total_working_years", 0, 40)
+    training_times_last_year = _int_or_default(employee, "training_times_last_year", 0, 6)
+    work_life_balance = _int_or_default(employee, "work_life_balance", 1, 4)
+    years_in_current_role = _int_or_default(employee, "years_in_current_role", 0, 19)
+    years_since_last_promotion = _int_or_default(employee, "years_since_last_promotion", 0, 16)
+    years_with_curr_manager = _int_or_default(employee, "years_with_curr_manager", 0, 18)
 
-    overtime_flag = int(rng.randint(0, 2))
-    business_travel_ord = int(rng.randint(0, 3))
+    overtime_val = _attr(employee, "overtime")
+    overtime_flag = int(bool(overtime_val)) if overtime_val is not None else int(_FEATURE_DEFAULTS["overtime"])
+    business_travel_ord = _business_travel_ord(employee)
 
     # ===== 部门 / 婚姻 one-hot =====
     dept = _infer_department(employee)
-    marital = _infer_marital_status(seed + 1)
+    marital = _marital_status(employee)
 
     dept_onehot = {f"dept_{d.replace('&', '').replace(' ', '_')}": int(dept == d) for d in DEPARTMENTS}
     marital_onehot = {f"marital_{m}": int(marital == m) for m in MARITAL_STATUSES}
@@ -248,6 +318,10 @@ def build_structured_features(employee) -> pd.DataFrame:
 def build_behavior_features(employee) -> pd.DataFrame:
     """构造单员工的行为统计特征 DataFrame（12 列 = 3 指标 × 4 统计量）.
 
+    ⚠️ 演示模式（P0-4）：当前无真实行为采集通道（无邮件/会议/登录日志表），
+    按训练侧同分布构造确定性时序，仅供演示。生产环境接入真实行为数据后，
+    应改为读取真实 12 月时序（保留相同的统计量提取逻辑）。
+
     行为指标：email_count / meeting_decline_rate / login_count
     每个指标生成 12 个月时序，再提取：
       - trend_slope（线性回归斜率）
@@ -261,7 +335,9 @@ def build_behavior_features(employee) -> pd.DataFrame:
     Returns:
         单行 DataFrame，列名为 {prefix}_{stat}。
     """
-    seed = _deterministic_seed(employee.id)
+    import numpy as np
+
+    seed = int.from_bytes(str(_attr(employee, "id", "unknown")).encode("utf-8")[:8], "big") % (2**31)
     rng = np.random.RandomState(seed + 1000)
 
     # 生成 12 个月时序（每个指标 1×12）
@@ -302,7 +378,7 @@ def build_behavior_features(employee) -> pd.DataFrame:
     return pd.DataFrame([feats])
 
 
-def build_features(employee) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def build_features(employee) -> tuple[pd.DataFrame, pd.DataFrame]:
     """构造员工完整特征（结构化 + 行为）.
 
     Args:

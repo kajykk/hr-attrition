@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -23,7 +23,6 @@ from app.tasks.data_retention import (
     purge_departed_employees,
     report_retention_status,
 )
-
 
 # ============================================================
 # 辅助：构造 Employee ORM 对象替身

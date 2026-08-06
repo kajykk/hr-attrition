@@ -8,8 +8,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -29,7 +28,6 @@ from app.services.llm_service import (
 )
 from app.services.risk_service import RiskService, get_feature_display_name
 
-
 # ============================================================
 # 1. audit_service 测试
 # ============================================================
@@ -39,7 +37,7 @@ def test_compute_hash_deterministic_same_input():
     """_compute_hash 对相同输入应返回相同哈希."""
     prev = GENESIS_HASH
     payload = {"action": "login", "user_id": "abc"}
-    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
     h1 = _compute_hash(prev, payload, ts)
     h2 = _compute_hash(prev, payload, ts)
@@ -50,7 +48,7 @@ def test_compute_hash_deterministic_same_input():
 
 def test_compute_hash_changes_on_different_input():
     """不同输入应产生不同哈希."""
-    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     h1 = _compute_hash(GENESIS_HASH, {"action": "a"}, ts)
     h2 = _compute_hash(GENESIS_HASH, {"action": "b"}, ts)
     assert h1 != h2
@@ -58,7 +56,7 @@ def test_compute_hash_changes_on_different_input():
 
 def test_compute_hash_changes_on_different_prev():
     """不同 prev_hash 应产生不同 current_hash."""
-    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     payload = {"action": "login"}
     h1 = _compute_hash(GENESIS_HASH, payload, ts)
     h2 = _compute_hash("a" * 64, payload, ts)
@@ -68,7 +66,7 @@ def test_compute_hash_changes_on_different_prev():
 def test_compute_hash_handles_non_serializable_via_default_str():
     """_compute_hash 用 default=str 处理非 JSON 序列化对象（如 UUID/datetime）."""
     uid = uuid4()
-    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     payload = {"tenant_id": uid, "ts": ts}
     # 不抛异常
     h = _compute_hash(GENESIS_HASH, payload, ts)
@@ -171,7 +169,7 @@ async def test_verify_hash_chain_intact_returns_true():
 
     # 构造 3 条日志，prev_hash 链式相接
     tenant_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # 第一条：prev=GENESIS, current=_compute_hash(GENESIS, ...)
     p1 = {
@@ -244,7 +242,7 @@ async def test_verify_hash_chain_tampered_returns_false():
     db = AsyncMock()
 
     tenant_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # 构造 1 条日志，但 current_hash 被篡改
     log1 = MagicMock()
@@ -274,7 +272,7 @@ async def test_verify_hash_chain_broken_link_returns_false():
     db = AsyncMock()
 
     tenant_id = uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     log1 = MagicMock()
     log1.id = uuid4()
@@ -477,7 +475,7 @@ async def test_stream_advice_falls_back_to_template_when_no_api_key(monkeypatch)
         chunks.append(chunk)
 
     # 应有 chunk + metadata + done
-    chunk_types = [list(c.keys())[0] for c in chunks]
+    chunk_types = [next(iter(c)) for c in chunks]
     assert "chunk" in chunk_types
     assert "metadata" in chunk_types
     assert chunks[-1] == {"done": True}
@@ -945,7 +943,6 @@ async def test_risk_service_predict_shap_exception_returns_empty_factors(monkeyp
 @pytest.mark.asyncio
 async def test_risk_service_predict_kill_switch_active_returns_degraded(monkeypatch):
     """Kill Switch 激活时 RiskService.predict 应返回降级结果."""
-    from app.services import risk_service
     from app.core import kill_switch
 
     async def _mock_active():
@@ -969,7 +966,6 @@ async def test_risk_service_predict_kill_switch_active_returns_degraded(monkeypa
 @pytest.mark.asyncio
 async def test_risk_service_predict_kill_switch_check_failure_fail_open(monkeypatch):
     """Kill Switch 检查异常时应 fail-open（继续正常流程，无 db 抛 ValueError）."""
-    from app.services import risk_service
     from app.core import kill_switch
 
     async def _mock_raises():

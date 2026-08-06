@@ -1,5 +1,5 @@
 """风险预测路由（D05 3.3 + 3.10 全局解释 + 3.3 SHAP 解释）."""
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require_role
 from app.core.tenant import get_current_tenant_id
 from app.db.session import get_db
-from app.models.user import ROLE_ADMIN, ROLE_HRBP, ROLE_HR_MANAGER, ROLE_MANAGER, User
+from app.models.user import ROLE_ADMIN, ROLE_HR_MANAGER, ROLE_HRBP, ROLE_MANAGER, User
 from app.schemas.risk import (
     GlobalExplanationOut,
     PredictRequest,
@@ -129,7 +129,7 @@ async def get_employee_explanation(
         factors=factors,
         base_value=0.0,
         output_value=float(result["risk_score"]) / 100.0,
-        computed_at=datetime.now(timezone.utc),
+        computed_at=datetime.now(UTC),
     )
 
 

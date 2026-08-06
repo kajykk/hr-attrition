@@ -13,10 +13,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-import pytest
-
 from app.core.security import create_access_token
-
 
 # ===== 共享辅助：覆盖 get_db 依赖，避免触发真实 PostgreSQL 连接 =====
 

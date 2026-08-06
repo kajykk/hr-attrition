@@ -5,8 +5,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import numpy as np
@@ -22,7 +21,6 @@ from app.core.security import (
     pii_hash,
     verify_password,
 )
-
 
 # ============================================================
 # 1. core/security.py 测试（覆盖 encrypt/decrypt/hash/JWT 分支）
@@ -557,8 +555,9 @@ async def test_init_redis_idempotent_when_already_initialized(monkeypatch):
 @pytest.mark.asyncio
 async def test_init_redis_connection_failure_sets_none(monkeypatch):
     """init_redis 连接失败应将 _redis_client 设为 None（不抛异常）."""
-    import app.core.redis as redis_mod
     import redis.asyncio as aioredis
+
+    import app.core.redis as redis_mod
 
     # 重置单例
     monkeypatch.setattr(redis_mod, "_redis_client", None)
@@ -824,7 +823,7 @@ async def test_stream_advice_falls_back_to_secondary_llm_when_primary_fails(monk
     # 应调用 2 次（主 + 备用）
     assert call_count["n"] == 2
     # 应降级到模板
-    chunk_types = [list(c.keys())[0] for c in chunks]
+    chunk_types = [next(iter(c)) for c in chunks]
     assert "chunk" in chunk_types
     assert chunks[-1] == {"done": True}
 

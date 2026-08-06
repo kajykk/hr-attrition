@@ -8,8 +8,6 @@
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import redis.asyncio as aioredis
 
 from app.core.config import settings
@@ -18,7 +16,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 # 模块级异步 Redis 客户端单例
-_redis_client: Optional[aioredis.Redis] = None
+_redis_client: aioredis.Redis | None = None
 
 
 async def init_redis() -> None:
@@ -57,7 +55,7 @@ async def close_redis() -> None:
             _redis_client = None
 
 
-def get_redis() -> Optional[aioredis.Redis]:
+def get_redis() -> aioredis.Redis | None:
     """返回模块级 Redis 客户端实例.
 
     Returns:

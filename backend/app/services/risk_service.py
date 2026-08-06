@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -25,8 +24,11 @@ from app.core.logging import get_logger
 from app.core.redis import get_redis
 from app.models.employee import Employee
 from app.models.risk_prediction import (
-    RISK_LEVEL_HIGH, RISK_LEVEL_LOW, RISK_LEVEL_MEDIUM,
-    RISK_LEVEL_MEDIUM_HIGH, RISK_LEVEL_MEDIUM_LOW,
+    RISK_LEVEL_HIGH,
+    RISK_LEVEL_LOW,
+    RISK_LEVEL_MEDIUM,
+    RISK_LEVEL_MEDIUM_HIGH,
+    RISK_LEVEL_MEDIUM_LOW,
     RiskPrediction,
 )
 
@@ -152,7 +154,7 @@ class RiskService:
         employee_id: UUID,
         tenant_id: UUID,
         force_refresh: bool = False,
-        db: Optional[AsyncSession] = None,
+        db: AsyncSession | None = None,
     ) -> dict:
         """单员工风险预测.
 
@@ -191,7 +193,7 @@ class RiskService:
                     "risk_level": RISK_LEVEL_MEDIUM,
                     "modality_scores": {"structured": 0.5, "behavior": 0.5},
                     "model_version": "kill-switch-active",
-                    "predicted_at": datetime.now(timezone.utc).isoformat(),
+                    "predicted_at": datetime.now(UTC).isoformat(),
                     "cached": False,
                     "shap_factors": [],
                     "kill_switch": True,
@@ -252,7 +254,7 @@ class RiskService:
                 modality_scores = {"structured": 0.5, "behavior": 0.5}
 
         risk_level = cls.score_to_level(risk_score)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # 5. 写入 risk_predictions 表（写失败直接抛出，由 API 层返回 500；不再静默吞掉）
         feature_values = {col: float(structured_df.iloc[0][col]) for col in structured_df.columns}
@@ -321,7 +323,7 @@ class RiskService:
         cls,
         tenant_id: UUID,
         window_days: int = 30,
-        db: Optional[AsyncSession] = None,
+        db: AsyncSession | None = None,
     ) -> dict:
         """全局特征重要性（D05 3.10 GET /risk/global-explanation，近 30 天聚合）.
 
@@ -351,11 +353,11 @@ class RiskService:
                 "model_version": cls.MODEL_VERSION,
                 "window_days": window_days,
                 "top_features": default_top_features,
-                "computed_at": datetime.now(timezone.utc).isoformat(),
+                "computed_at": datetime.now(UTC).isoformat(),
             }
 
         try:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+            cutoff = datetime.now(UTC) - timedelta(days=window_days)
             # 只取 feature_values 列 + 限制聚合行数（避免全表加载大 JSONB）
             stmt = select(RiskPrediction.feature_values).where(
                 RiskPrediction.tenant_id == tenant_id,
@@ -370,7 +372,7 @@ class RiskService:
                     "model_version": cls.MODEL_VERSION,
                     "window_days": window_days,
                     "top_features": default_top_features,
-                    "computed_at": datetime.now(timezone.utc).isoformat(),
+                    "computed_at": datetime.now(UTC).isoformat(),
                 }
 
             # CPU 密集聚合 → to_thread（避免阻塞事件循环）
@@ -384,7 +386,7 @@ class RiskService:
                 "model_version": cls.MODEL_VERSION,
                 "window_days": window_days,
                 "top_features": top_features,
-                "computed_at": datetime.now(timezone.utc).isoformat(),
+                "computed_at": datetime.now(UTC).isoformat(),
             }
         except Exception as e:  # noqa: BLE001
             logger.error("global_explanation 聚合失败，返回默认占位 | err=%s", e)
@@ -392,7 +394,7 @@ class RiskService:
                 "model_version": cls.MODEL_VERSION,
                 "window_days": window_days,
                 "top_features": default_top_features,
-                "computed_at": datetime.now(timezone.utc).isoformat(),
+                "computed_at": datetime.now(UTC).isoformat(),
             }
 
 

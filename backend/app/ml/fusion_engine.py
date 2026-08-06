@@ -93,7 +93,7 @@ class FusionEngine:
         """单员工预测，返回 {risk_score, risk_level, modality_scores}."""
         score_final, modality = self.fuse(structured_features, behavior_features)
         sf = float(score_final[0])
-        risk_score = int(round(sf * 100))
+        risk_score = round(sf * 100)
         return {
             "risk_score": risk_score,
             "risk_level": score_to_level(risk_score),
@@ -108,7 +108,7 @@ class FusionEngine:
         score_final, modality = self.fuse(structured_features, behavior_features)
         results = []
         for i, sf in enumerate(score_final):
-            risk_score = int(round(sf * 100))
+            risk_score = round(sf * 100)
             results.append({
                 "risk_score": risk_score,
                 "risk_level": score_to_level(risk_score),

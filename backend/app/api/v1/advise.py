@@ -14,7 +14,6 @@ from app.db.session import get_db
 from app.models.employee import Employee
 from app.models.user import User
 from app.models.warning import WarningRecord
-from app.schemas.risk import ShapFactor
 from app.services.llm_service import LLMService, sanitize_pii
 from app.services.risk_service import RiskService, get_feature_display_name
 
@@ -137,9 +136,7 @@ async def advise_stream(
         async for chunk in LLMService.stream_advice(
             sanitized, shap_factors, risk_score
         ):
-            if "chunk" in chunk:
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-            elif "metadata" in chunk:
+            if "chunk" in chunk or "metadata" in chunk:
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
             elif chunk.get("done"):
                 yield "data: [DONE]\n\n"

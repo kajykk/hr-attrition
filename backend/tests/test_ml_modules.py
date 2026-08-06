@@ -22,7 +22,8 @@ import pytest
 
 from app.ml.data_generation import (
     AUDIT_COLUMNS as DG_AUDIT_COLUMNS,
-    DEFAULT_N,
+)
+from app.ml.data_generation import (
     N_MONTHS,
     compute_attrition_probability,
     generate_behavior_data,
@@ -595,7 +596,7 @@ def test_run_fairness_test_returns_passed_true():
 
 def test_fairness_group_parity_computes_difference():
     """_group_parity 应正确计算组间偏差."""
-    from app.ml.fairness_test import PARITY_MAX, _group_parity
+    from app.ml.fairness_test import _group_parity
 
     # 构造两组：M 高风险率 0.8，F 高风险率 0.2 → diff=0.6
     df = pd.DataFrame({

@@ -31,6 +31,11 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     worker_max_tasks_per_child=200,
     beat_schedule={
+        # Celery 心跳：每 5 分钟（供 /health 探测 worker/beat 存活度，P2-11）
+        "celery-heartbeat": {
+            "task": "app.tasks.model_governance.worker_heartbeat",
+            "schedule": crontab(minute="*/5"),
+        },
         # 漂移检测：每日 02:00（D03 5.2 离线流）
         "drift-detection-daily": {
             "task": "app.tasks.model_governance.detect_drift",

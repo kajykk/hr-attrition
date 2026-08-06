@@ -21,8 +21,8 @@ class TenantContext:
     """租户上下文，承载当前请求的租户与用户身份."""
 
     tenant_id: str
-    user_id: Optional[str] = None
-    role: Optional[str] = None
+    user_id: str | None = None
+    role: str | None = None
 
 
 def set_tenant_context(ctx: TenantContext) -> None:
@@ -30,7 +30,7 @@ def set_tenant_context(ctx: TenantContext) -> None:
     tenant_context.set(ctx)
 
 
-def get_tenant_context() -> Optional[TenantContext]:
+def get_tenant_context() -> TenantContext | None:
     """获取当前请求的租户上下文."""
     return tenant_context.get()
 
@@ -56,8 +56,9 @@ async def tenant_middleware(request, call_next):
 
     复用 DWS tenant_context 模块思路。无 Authorization 头放行（由端点 deps 二次校验）。
     """
-    from app.core.security import decode_token
     from jose import JWTError
+
+    from app.core.security import decode_token
 
     auth = request.headers.get("Authorization", "")
     if auth.lower().startswith("bearer "):
@@ -88,7 +89,7 @@ async def tenant_middleware(request, call_next):
     return response
 
 
-def require_tenant_header(x_tenant_id: Optional[str] = Header(None)) -> str:
+def require_tenant_header(x_tenant_id: str | None = Header(None)) -> str:
     """依赖项：要求请求头携带 X-Tenant-Id（用于 API Key 服务间调用）."""
     if not x_tenant_id:
         raise HTTPException(
