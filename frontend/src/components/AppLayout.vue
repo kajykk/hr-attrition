@@ -14,6 +14,7 @@ const allMenu = [
   { path: '/risk', label: '风险预测', icon: '⚠️', roles: null },
   { path: '/warnings', label: '预警', icon: '🚨', roles: null },
   { path: '/advise', label: '保留建议', icon: '🤖', roles: ['admin', 'hr_manager', 'hrbp'] },
+  { path: '/knowledge', label: '知识库', icon: '📚', roles: null },
   { path: '/governance', label: '治理', icon: '⚙️', roles: ['admin'] },
 ]
 

@@ -18,6 +18,21 @@ services:
       - hra-net
     restart: unless-stopped
 
+  # ===== 数据库迁移（one-shot：alembic upgrade head 后退出） =====
+  # api/worker/beat 依赖其成功完成后再启动，保证 schema 先行
+  migrate:
+    build: ./backend
+    command: alembic upgrade head
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://hra:${POSTGRES_PASSWORD:-hra}@postgres:5432/hra
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hra-net
+    restart: "no"
+
   # ===== API 网关（FastAPI） =====
   api:
     build: ./backend
@@ -27,12 +42,16 @@ services:
       - DATABASE_URL=postgresql+asyncpg://hra:${POSTGRES_PASSWORD:-hra}@postgres:5432/hra
       - REDIS_URL=redis://redis:6379/0
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      # 仅绑定本机回环（安全修复）：8000 不直接对外暴露，统一经 nginx 入口，
+      # 同时防止绕过反代直连后端伪造 X-Forwarded-For 绕过登录限流
+      - "127.0.0.1:8000:8000"
     networks:
       - hra-net
     restart: unless-stopped
@@ -46,8 +65,12 @@ services:
       - DATABASE_URL=postgresql+asyncpg://hra:${POSTGRES_PASSWORD:-hra}@postgres:5432/hra
       - REDIS_URL=redis://redis:6379/0
     depends_on:
-      - api
-      - redis
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
     networks:
       - hra-net
     restart: unless-stopped
@@ -61,19 +84,24 @@ services:
       - DATABASE_URL=postgresql+asyncpg://hra:${POSTGRES_PASSWORD:-hra}@postgres:5432/hra
       - REDIS_URL=redis://redis:6379/0
     depends_on:
-      - api
-      - redis
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
     networks:
       - hra-net
     restart: unless-stopped
 
-  # ===== PostgreSQL 15（本地开发镜像）
-  # 生产环境改用阿里云 RDS PostgreSQL 15 高可用版（D10 2.1）
+  # ===== PostgreSQL 15 + pgvector（本地开发镜像，feat/rag-kb）
+  # 生产环境改用阿里云 RDS PostgreSQL 15 高可用版（需自行创建 pgvector 扩展）
   # 配置：shared_buffers=2GB / work_mem=64MB / max_connections=200
   # 主从：流复制（异步）+ WAL 归档至 OSS
   # 注意：host 端口 5433/6380 避免与本地已装 PG(5432)/Redis(6379) 冲突
   postgres:
-    image: postgres:15-alpine
+    # feat/rag-kb：pgvector 扩展内置镜像（迁移 0003 会 CREATE EXTENSION vector）
+    image: pgvector/pgvector:pg15
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-hra}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hra}
@@ -155,6 +183,8 @@ services:
     image: grafana/promtail:3.0
     volumes:
       - /var/log:/var/log:ro
+      # promtail.yml 使用 docker_sd_configs 发现容器日志，必须挂载 docker.sock（只读）
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
     command: -config.file=/etc/promtail/config.yml
     depends_on:

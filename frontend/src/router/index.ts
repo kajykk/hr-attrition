@@ -23,6 +23,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/AdviseView.vue'),
         meta: { title: 'AI 保留建议', roles: ['admin', 'hr_manager', 'hrbp'] },
       },
+      {
+        path: 'knowledge',
+        name: 'knowledge',
+        component: () => import('@/views/KnowledgeBaseView.vue'),
+        meta: { title: '制度知识库' },
+      },
       { path: 'dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue'), meta: { title: '仪表盘' } },
       {
         path: 'governance',

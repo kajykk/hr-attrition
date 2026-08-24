@@ -1,0 +1,14 @@
+{
+  "total_questions": 50,
+  "recall_at_5": 1.0,
+  "mrr": 0.9815,
+  "refusal_accuracy": 0.8571,
+  "p95_latency_ms": {
+    "retrieval_p50": 9,
+    "retrieval_p95": 12
+  },
+  "answerable": 36,
+  "unanswerable": 14,
+  "misses": [],
+  "_note": "latency 仅含检索阶段；端到端 P95 由 query 接口 latency_ms 字段另行采集"
+}

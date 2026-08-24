@@ -20,7 +20,7 @@ COPY pyproject.toml ./
 # 创建临时包结构使 pip install 可解析（避免源码未到位导致失败）
 RUN mkdir -p app && echo "" > app/__init__.py && \
     pip install --upgrade pip && \
-    pip install ".[serving]" && \
+    pip install ".[serving,rag]" && \
     rm -rf app
 
 # 复制源码 + 模型工件

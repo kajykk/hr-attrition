@@ -18,7 +18,11 @@ celery_app = Celery(
     "hra",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.model_governance", "app.tasks.data_retention"],
+    include=[
+        "app.tasks.model_governance",
+        "app.tasks.data_retention",
+        "app.tasks.kb_indexing",
+    ],
 )
 
 celery_app.conf.update(
