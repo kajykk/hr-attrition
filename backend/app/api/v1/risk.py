@@ -52,6 +52,7 @@ async def get_employee_risk(
         model_version=result["model_version"],
         predicted_at=result["predicted_at"],
         cached=result["cached"],
+        behavior_data_source=result.get("behavior_data_source"),
     )
 
 
@@ -81,6 +82,7 @@ async def predict_risk(
         model_version=result["model_version"],
         predicted_at=result["predicted_at"],
         cached=result["cached"],
+        behavior_data_source=result.get("behavior_data_source"),
     )
 
 

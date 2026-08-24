@@ -40,6 +40,11 @@ from app.ml.feature_engineering import (
 # DB 百分位（0-100）→ 模型输入分位（0-1）的换算系数（显式契约，训练侧同理）
 SALARY_PERCENTILE_SCALE = 0.01
 
+# 行为模态数据来源标识：当前无真实行为采集通道，行为时序为 demo 数据
+# （由 employee.id 播种确定性生成），风险预测 API 响应以该值标注来源；
+# 接入真实行为日志后应改为 "real"（路线图项，见 README）。
+BEHAVIOR_DATA_SOURCE_DEMO = "demo"
+
 _MODELS_DIR = Path(__file__).resolve().parent / "models"
 _FEATURE_METADATA_PATH = _MODELS_DIR / "feature_metadata.pkl"
 _training_metadata_cache: dict | None = None

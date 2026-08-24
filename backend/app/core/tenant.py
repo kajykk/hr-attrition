@@ -1,10 +1,13 @@
 """多租户隔离模块 - 基于 ContextVar + 中间件实现行级隔离（ADR-002）.
 
 请求处理流程：
-  1. 中间件从 JWT/Header 提取 tenant_id
+  1. 中间件从 JWT（Authorization: Bearer）提取 tenant_id
   2. 注入 TenantContext (ContextVar)
   3. 所有业务 SQL 强制带 WHERE tenant_id = :tenant_id
   4. 跨租户访问 → 403 Forbidden
+
+安全约束：租户身份只能来自服务端校验过的 JWT，客户端自报的
+X-Tenant-Id 头不参与上下文注入（防止伪造越权）。
 """
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -77,11 +80,9 @@ async def tenant_middleware(request, call_next):
             # 无效 token 由端点依赖拦截，中间件不阻断
             pass
 
-    # 也支持 X-Tenant-Id 头注入（用于服务间调用）
-    x_tenant = request.headers.get("X-Tenant-Id")
-    if x_tenant and tenant_context.get() is None:
-        set_tenant_context(TenantContext(tenant_id=x_tenant))
-
+    # 安全说明（P0 修复）：不再信任客户端可控的 X-Tenant-Id 头注入租户上下文。
+    # 租户上下文只能来自服务端校验过的 JWT；无 JWT 的服务间调用必须改用
+    # 服务端凭据（API Key → 服务账号 JWT），而非自报租户头。
     try:
         response = await call_next(request)
     finally:
@@ -90,7 +91,12 @@ async def tenant_middleware(request, call_next):
 
 
 def require_tenant_header(x_tenant_id: str | None = Header(None)) -> str:
-    """依赖项：要求请求头携带 X-Tenant-Id（用于 API Key 服务间调用）."""
+    """依赖项：要求请求头携带 X-Tenant-Id（用于 API Key 服务间调用）.
+
+    .. deprecated::
+        仅限显式使用该依赖的端点；中间件已不再信任 X-Tenant-Id 注入租户
+        上下文（防客户端伪造越权）。新代码请走 JWT。
+    """
     if not x_tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

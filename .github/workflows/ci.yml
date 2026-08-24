@@ -1,0 +1,83 @@
+# CI：后端 ruff + pytest（真实 postgres/redis service），前端 npm ci + lint + build
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同分支新推送取消过时运行，省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (ruff + pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        # 与 compose 一致使用 pgvector 镜像（0003 迁移需要 vector 扩展）
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: hra
+          POSTGRES_PASSWORD: hra
+          POSTGRES_DB: hra_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hra"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://hra:hra@localhost:5432/hra_test
+      REDIS_URL: redis://localhost:6379/1
+      APP_ENV: test
+      JWT_SECRET: ci-secret-64-char-random-please-generate-securely-ci-secret-test
+      LOG_LEVEL: WARNING
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install dependencies
+        run: pip install -e ".[ml,dev]"
+      - name: Ruff lint
+        run: python -m ruff check app tests
+      - name: Pytest
+        run: pytest -q
+
+  frontend:
+    name: frontend (lint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build

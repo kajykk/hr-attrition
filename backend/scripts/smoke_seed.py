@@ -31,6 +31,8 @@ async def main():
                 await db.flush()
             import pyotp
 
+            from app.core.pii_crypto import encrypt as pii_encrypt
+
             totp_secret = pyotp.random_base32()
             admin = User(
                 tenant_id=tenant.id,
@@ -39,7 +41,8 @@ async def main():
                 name="系统管理员",
                 role=ROLE_ADMIN,
                 status="active",
-                totp_secret=totp_secret,
+                # TOTP secret 落库前 Fernet 加密（auth 登录侧解密校验）
+                totp_secret=pii_encrypt(totp_secret),
             )
             db.add(admin)
             await db.flush()

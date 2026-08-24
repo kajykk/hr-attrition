@@ -106,7 +106,8 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
   function startHeartbeat() {
     heartbeatTimer = setInterval(() => {
       if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'ping' }))
+        // 后端约定裸文本 "ping"（ws.py 按 data === 'ping' 判定），JSON 会被当作未知消息忽略
+        ws.send('ping')
       }
     }, 30000)
   }

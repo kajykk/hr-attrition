@@ -501,6 +501,8 @@ def _fake_user(role="admin", totp_secret=None):
         status="active",
         totp_secret=totp_secret,
         password_hash=hash_password("correct-password"),
+        failed_login_count=0,
+        locked_until=None,
     )
 
 

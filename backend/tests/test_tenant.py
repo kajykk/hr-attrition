@@ -5,7 +5,7 @@
   - get_current_tenant_id 无上下文时抛 403
   - TenantContext dataclass 字段
   - require_tenant_header 依赖（缺失 X-Tenant-Id → 403）
-  - tenant_middleware 中间件（JWT 与 X-Tenant-Id 头注入）
+  - tenant_middleware 中间件（仅 JWT 注入；X-Tenant-Id 不受信任）
 """
 from __future__ import annotations
 
@@ -167,8 +167,8 @@ def test_require_tenant_header_raises_403_when_empty():
 
 
 @pytest.mark.asyncio
-async def test_tenant_middleware_x_tenant_id_header_injects_context():
-    """中间件应从 X-Tenant-Id 头注入租户上下文."""
+async def test_tenant_middleware_x_tenant_id_header_does_not_inject_context():
+    """X-Tenant-Id 头不再受信任：仅凭该头不得注入租户上下文（防客户端伪造越权）."""
     from app.core.tenant import tenant_middleware
 
     # 构造 mock request 与 call_next
@@ -180,10 +180,9 @@ async def test_tenant_middleware_x_tenant_id_header_injects_context():
         status_code = 200
 
     async def _fake_call_next(request):
-        # 在 call_next 内验证上下文已注入
+        # 在 call_next 内验证上下文未被注入
         ctx = get_tenant_context()
-        assert ctx is not None
-        assert ctx.tenant_id == "t-from-header"
+        assert ctx is None
         return _FakeResponse()
 
     request = _FakeRequest({"X-Tenant-Id": "t-from-header"})
@@ -197,7 +196,7 @@ async def test_tenant_middleware_x_tenant_id_header_injects_context():
 
 @pytest.mark.asyncio
 async def test_tenant_middleware_no_headers_does_not_inject_context():
-    """无 Authorization 与 X-Tenant-Id 头时中间件不注入上下文."""
+    """无 Authorization 头时中间件不注入上下文（X-Tenant-Id 不再受信任）."""
     from app.core.tenant import tenant_middleware
 
     class _FakeRequest:
@@ -274,7 +273,7 @@ async def test_tenant_middleware_invalid_jwt_does_not_inject_context():
 
 @pytest.mark.asyncio
 async def test_tenant_middleware_x_tenant_id_does_not_override_jwt():
-    """JWT 已注入上下文时 X-Tenant-Id 头不应覆盖."""
+    """JWT 已注入上下文时 X-Tenant-Id 头被忽略（不覆盖、不参与注入）."""
     from app.core.security import create_access_token
     from app.core.tenant import tenant_middleware
 
@@ -306,18 +305,24 @@ async def test_tenant_middleware_x_tenant_id_does_not_override_jwt():
 @pytest.mark.asyncio
 async def test_tenant_middleware_clears_context_on_exception():
     """call_next 抛异常时中间件 finally 块仍应清除上下文."""
+    from app.core.security import create_access_token
     from app.core.tenant import tenant_middleware
 
     class _FakeRequest:
         def __init__(self, headers_dict):
             self.headers = headers_dict
 
+    class _FakeResponse:
+        status_code = 200
+
+    token = create_access_token(str(uuid4()), str(uuid4()), "hrbp")
+
     async def _fake_call_next(request):
         # 上下文已注入
         assert get_tenant_context() is not None
         raise RuntimeError("endpoint error")
 
-    request = _FakeRequest({"X-Tenant-Id": "t-001"})
+    request = _FakeRequest({"Authorization": f"Bearer {token}"})
     with pytest.raises(RuntimeError, match="endpoint error"):
         await tenant_middleware(request, _fake_call_next)
 

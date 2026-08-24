@@ -2,11 +2,16 @@
 
 登录端点使用 settings.RATE_LIMIT_LOGIN（默认 5/minute），按客户端真实 IP 计数。
 
-IP 识别（P0-2 修复）：
-  优先取 X-Forwarded-For 中**最左侧**的原始客户端地址（nginx 已注入
-  `$proxy_add_x_forwarded_for`），无该头时回退 request.client.host。
-  注意：仅信任 nginx 反代注入的头，生产环境应确保 8000 端口不直接暴露（由
-  nginx 统一入口），避免伪源头绕过限流。
+IP 识别（P0-2 修复 + 绕过加固）：
+  X-Forwarded-For 是客户端可伪造的头，最左侧段完全不可信。nginx 注入
+  `$proxy_add_x_forwarded_for` 时会把"直连对端真实 IP"追加到**最右侧**。
+  因此本模块从右往左取第 N 段（N = TRUSTED_PROXY_COUNT，默认 1）作为限流
+  粒度 IP：每经过一层可信代理，XFF 右侧多一个该代理写入的真实地址。
+  - N=1（单层 nginx）：取最右段 = nginx 看到的真实客户端 IP
+  - N=2（CDN → nginx）：取倒数第二段
+  - XFF 段数 < N 时说明存在伪造/异常，整体不信任，回退直连地址
+  配套约束：api 容器端口仅绑定 127.0.0.1（compose），必须经 nginx 入口访问，
+  防止攻击者绕过代理直连后端伪造成任意 IP 的限流键。
 """
 from __future__ import annotations
 
@@ -21,14 +26,18 @@ from app.core.config import settings
 def _client_ip(request: Request) -> str:
     """从请求提取限流粒度 IP.
 
-    - 优先 X-Forwarded-For 最左侧（原始客户端）
-    - 无代理头则回退直连地址
+    - 有 X-Forwarded-For 时从右往左取第 TRUSTED_PROXY_COUNT 个可信段
+      （最左侧为客户端可伪造值，绝不采用）
+    - 无代理头 / 可信段不足时回退 TCP 直连地址
     """
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        n = max(1, settings.TRUSTED_PROXY_COUNT)
+        idx = len(parts) - n
+        if idx >= 0 and parts[idx]:
+            return parts[idx]
+        # 段数少于可信代理层数 → 头部可疑（伪造/截断），整体弃用
     client = request.client
     return client.host if client else "unknown"
 

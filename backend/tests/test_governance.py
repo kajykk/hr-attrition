@@ -334,15 +334,19 @@ def test_fairness_daily_report_celery_task_executes():
 
 
 def test_auto_rollback_celery_task_executes():
-    """auto_rollback Celery 任务应能执行（不崩溃）."""
+    """auto_rollback Celery 任务应能执行（不崩溃）.
+
+    契约：真实回滚执行器未实现 → 恒返回 status="not_implemented"，
+    且不得伪造 rolled_back 字段。
+    """
     from app.tasks.model_governance import auto_rollback
 
     result = auto_rollback()
     assert isinstance(result, dict)
     assert "status" in result
     assert "checked_at" in result
-    assert "rolled_back" in result
-    assert isinstance(result["rolled_back"], bool)
+    assert result["status"] == "not_implemented"
+    assert "rolled_back" not in result  # 诚实化：不伪造回滚状态
 
 
 # ===== 4. RiskService Kill Switch 熔断测试 =====

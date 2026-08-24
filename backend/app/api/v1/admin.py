@@ -4,9 +4,11 @@
   GET  /admin/kill-switch           - 查询当前状态
   POST /admin/kill-switch/activate  - 激活（写审计日志）
   POST /admin/kill-switch/deactivate - 解除（写审计日志）
-  GET  /admin/drift                 - 漂移检测结果（同步执行检测任务）
-  GET  /admin/fairness              - 公平性监测结果（同步执行日报任务）
+  GET  /admin/drift                 - 漂移检测结果（线程池执行检测任务）
+  GET  /admin/fairness              - 公平性监测结果（线程池执行日报任务）
 """
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,9 +107,11 @@ async def get_model_drift(
 ):
     """漂移检测结果（D03 4.5，仅管理员）.
 
-    同步执行 detect_drift 任务逻辑（PSI/KL），数据源不可用时返回 502。
+    线程池中执行 detect_drift 任务逻辑（PSI/KL 涉及 pandas/numpy 计算，
+    避免阻塞事件循环），数据源不可用时返回 502。data_source 标注
+    current 分布来源（线上 DB / 静态降级 CSV）。
     """
-    result = detect_drift()
+    result = await asyncio.to_thread(detect_drift)
     if result.get("status") != "ok":
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -118,6 +122,7 @@ async def get_model_drift(
         critical_features=result.get("critical_features", []),
         features=result.get("features", []),
         computed_at=result["checked_at"],
+        data_source=result.get("data_source"),
     )
 
 
@@ -127,10 +132,11 @@ async def get_model_fairness(
 ):
     """公平性监测结果（D10 7.3，仅管理员）.
 
-    同步执行 fairness_daily_report 任务逻辑（4 维度偏差），
-    数据不可用时返回 502；偏差为百分比（0-100）。
+    线程池中执行 fairness_daily_report 任务逻辑（4 维度偏差，
+    pandas 计算不阻塞事件循环），数据不可用时返回 502；
+    偏差为百分比（0-100）。data_source 如实标注审计数据来源。
     """
-    result = fairness_daily_report()
+    result = await asyncio.to_thread(fairness_daily_report)
     if result.get("status") != "ok":
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -147,4 +153,5 @@ async def get_model_fairness(
             for name, info in dimensions.items()
         ],
         computed_at=result["checked_at"],
+        data_source=result.get("data_source"),
     )

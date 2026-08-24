@@ -1,4 +1,5 @@
 # 后端构建上下文忽略（P1-8）
+# 注意：alembic/ 不排除——compose migrate 服务需在镜像内执行 alembic upgrade head
 .venv
 venv
 __pycache__
@@ -11,6 +12,5 @@ htmlcov
 *.log
 .env
 tests
-alembic
 data
 docs

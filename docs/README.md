@@ -31,14 +31,14 @@
 | D10 | 上线部署方案 | [D10_deploy/HRA-D10-V1.0.md](D10_deploy/HRA-D10-V1.0.md) | ✅ V1.1 |
 | D11 | 项目验收标准 | [D11_acceptance/HRA-D11-V1.0.md](D11_acceptance/HRA-D11-V1.0.md) | ✅ V1.1 |
 
-### 辅助文档（A01-A04，待生成）
+### 辅助文档（A01-A04）
 
-| 编号 | 文档名称 | 计划路径 | 状态 |
+| 编号 | 文档名称 | 路径 | 状态 |
 |---|---|---|---|
-| A01 | 运维手册（Runbook）| templates/A01-runbook.md | 已排期（W7 T-709）|
-| A02 | 应急预案（ER）| templates/A02-emergency.md | 已排期（W8 T-810）|
-| A03 | 模型治理手册 | templates/A03-model-governance.md | 已排期（W8 T-811）|
-| A04 | 变更管理记录 | templates/A04-change-log.md | 已排期（W8 T-812）|
+| A01 | 运维手册（Runbook）| [A01_runbook/HRA-A01-V1.0.md](A01_runbook/HRA-A01-V1.0.md) | ✅ V1.0 |
+| A02 | 应急预案（ER）| [A02_emergency/HRA-A02-V1.0.md](A02_emergency/HRA-A02-V1.0.md) | ✅ V1.0 |
+| A03 | 模型治理手册 | [A03_model_governance/HRA-A03-V1.0.md](A03_model_governance/HRA-A03-V1.0.md) | ✅ V1.0 |
+| A04 | 变更管理记录 | [A04_change_log/HRA-A04-V1.0.md](A04_change_log/HRA-A04-V1.0.md) | ✅ V1.0 |
 
 ---
 

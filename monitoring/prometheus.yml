@@ -1,10 +1,14 @@
 # Prometheus 配置（D03 7.1 指标采集）
+# 诚实性说明（审查修复）：仅保留实际部署且可抓取的 target。
+# worker:9808 / postgres:9187 / redis:9121 需要额外部署 exporter
+# （prometheus-celery-exporter / postgres_exporter / redis_exporter），
+# 当前 compose 未包含，抓取会持续 target down——已注释，待部署后启用。
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
 scrape_configs:
-  # FastAPI 后端指标（/metrics 端点，需 prometheus-fastapi-instrumentator）
+  # FastAPI 后端指标（/metrics 端点，prometheus-fastapi-instrumentator 已内置）
   - job_name: "hra-api"
     metrics_path: /metrics
     static_configs:
@@ -13,28 +17,31 @@ scrape_configs:
           service: "api"
           env: "local"
 
-  # Celery Worker 指标（需 flower 或 prometheus-celery-exporter）
-  - job_name: "hra-celery"
-    static_configs:
-      - targets: ["worker:9808"]
-        labels:
-          service: "celery-worker"
-
   # Prometheus 自监控
   - job_name: "prometheus"
     static_configs:
       - targets: ["localhost:9090"]
 
-  # PostgreSQL 指标（需 postgres_exporter，可选）
-  - job_name: "postgres"
-    static_configs:
-      - targets: ["postgres:9187"]
-        labels:
-          service: "postgres"
+  # ---- 以下 target 的 exporter 未随 compose 部署，启用前需自行添加服务 ----
 
-  # Redis 指标（需 redis_exporter，可选）
-  - job_name: "redis"
-    static_configs:
-      - targets: ["redis:9121"]
-        labels:
-          service: "redis"
+  # Celery Worker 指标：需在 worker 容器内运行 flower（--port=9808）
+  # 或独立部署 prometheus-celery-exporter 后取消注释
+  # - job_name: "hra-celery"
+  #   static_configs:
+  #     - targets: ["worker:9808"]
+  #       labels:
+  #         service: "celery-worker"
+
+  # PostgreSQL 指标：需部署 wrouesnel/postgres_exporter 并连 postgres
+  # - job_name: "postgres"
+  #   static_configs:
+  #     - targets: ["postgres:9187"]
+  #       labels:
+  #         service: "postgres"
+
+  # Redis 指标：需部署 oliver006/redis_exporter 并指向 redis:6379
+  # - job_name: "redis"
+  #   static_configs:
+  #     - targets: ["redis:9121"]
+  #       labels:
+  #         service: "redis"

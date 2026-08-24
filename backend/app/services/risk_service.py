@@ -233,7 +233,11 @@ class RiskService:
             raise ValueError(f"员工不存在或跨租户访问 | employee_id={employee_id}")
 
         # 3. 构造特征（先校验训练/推理特征契约，防漂移）
-        from app.ml.feature_provider import assert_feature_contract, build_features
+        from app.ml.feature_provider import (
+            BEHAVIOR_DATA_SOURCE_DEMO,
+            assert_feature_contract,
+            build_features,
+        )
         assert_feature_contract()
         structured_df, behavior_df = build_features(employee)
 
@@ -292,6 +296,7 @@ class RiskService:
             "predicted_at": now.isoformat(),
             "cached": False,
             "shap_factors": shap_factors,
+            "behavior_data_source": BEHAVIOR_DATA_SOURCE_DEMO,
         }
 
         # 7. 写 Redis 缓存（降级：失败仅 log warning）

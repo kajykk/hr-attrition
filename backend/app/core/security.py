@@ -1,4 +1,7 @@
-"""安全模块 - JWT + 密码哈希 + PII Fernet 字段级加密（ADR-007）."""
+"""安全模块 - JWT + 密码哈希 + PII Fernet 字段级加密（ADR-007）+ PII HMAC 检索哈希."""
+import hashlib
+import hmac as _hmac
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -9,6 +12,9 @@ from cryptography.fernet import Fernet, InvalidToken
 from jose import jwt
 
 from app.core.config import settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def hash_password(password: str) -> str:
@@ -45,12 +51,17 @@ def create_access_token(
 
 
 def create_refresh_token(subject: str, tenant_id: str) -> str:
-    """创建 refresh token."""
+    """创建 refresh token.
+
+    携带 jti（唯一 ID）：/auth/refresh 轮换时旧 jti 进 Redis 黑名单，
+    实现"一次性使用 + 重放检测"。
+    """
     now = datetime.now(UTC)
     payload = {
         "sub": subject,
         "tenant_id": tenant_id,
         "type": "refresh",
+        "jti": str(uuid.uuid4()),
         "iat": now,
         "exp": now + timedelta(days=settings.JWT_REFRESH_EXPIRE_DAYS),
     }
@@ -95,10 +106,48 @@ def decrypt_pii(ciphertext: str | None) -> str | None:
         return None
 
 
+# ===== PII HMAC 检索哈希（pepper 加固，替代裸 SHA256） =====
+# 裸 SHA256 可被彩虹表/字典预计算；HMAC-SHA256 + 服务端 pepper 使离线
+# 碰撞不可行。pepper 轮换会使存量 *_hash 索引失效，需离线重算迁移。
+_pepper_cache: bytes | None = None
+_pepper_warned = False
+
+
+def _pii_hash_pepper() -> bytes:
+    """获取 PII 检索哈希 pepper.
+
+    优先 PII_HASH_PEPPER 环境变量；缺失时从 PII_FERNET_KEY 派生（SHA256）
+    并 warning 提示配置独立 pepper。
+    """
+    global _pepper_cache, _pepper_warned
+    if _pepper_cache is not None:
+        return _pepper_cache
+
+    pepper = (getattr(settings, "PII_HASH_PEPPER", "") or "").strip()
+    if pepper:
+        _pepper_cache = pepper.encode("utf-8")
+        return _pepper_cache
+
+    # 回退：从 Fernet key 派生域分隔摘要（避免直接复用加密密钥本体）
+    if not _pepper_warned:
+        logger.warning(
+            "PII_HASH_PEPPER 未配置，回退使用 PII_FERNET_KEY 派生 pepper"
+            "（建议配置独立随机 pepper，更换会使存量 *_hash 失效需重算）"
+        )
+        _pepper_warned = True
+    derived = hashlib.sha256(b"hra:pii-hash-pepper:" + settings.PII_FERNET_KEY.encode("utf-8")).hexdigest()
+    _pepper_cache = derived.encode("utf-8")
+    return _pepper_cache
+
+
 def pii_hash(plaintext: str | None) -> str | None:
-    """PII 字段哈希（SHA256，用于检索索引，参考 D04 3.1 name_hash 字段）."""
+    """PII 字段哈希（HMAC-SHA256 + pepper，用于检索索引）.
+
+    注意：与历史裸 SHA256 哈希不兼容，切换后需按新算法重算存量 name_hash 等
+    索引列，否则等值检索会漏配。
+    """
     if plaintext is None:
         return None
-    import hashlib
-
-    return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+    return _hmac.new(
+        _pii_hash_pepper(), plaintext.encode("utf-8"), hashlib.sha256
+    ).hexdigest()

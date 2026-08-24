@@ -4,11 +4,19 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios'
 import {
+  AUTH_KEYS,
   clearAuthStorage,
   getAccessToken,
   getRefreshToken,
-  getStoredUser,
 } from '@/api/auth-keys'
+import { useAuthStore } from '@/stores/auth'
+
+// /auth/refresh 响应（轮换时后端会回发新的 refresh_token）
+interface RefreshResponse {
+  access_token: string
+  refresh_token?: string
+  expires_in: number
+}
 
 export const apiClient: AxiosInstance = axios.create({
   baseURL: '',
@@ -16,16 +24,12 @@ export const apiClient: AxiosInstance = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-// 请求拦截：注入 Authorization + X-Tenant-Id（双保险，与 JWT 解析一致）
+// 请求拦截：仅注入 Authorization（租户上下文由后端从 JWT 解析，客户端不可自报）
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const token = getAccessToken()
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`
-    }
-    const user = getStoredUser<{ tenant_id?: string }>()
-    if (user?.tenant_id && config.headers) {
-      config.headers['X-Tenant-Id'] = user.tenant_id
     }
     return config
   },
@@ -39,10 +43,24 @@ async function refreshAccessToken(): Promise<string | null> {
   const refresh = getRefreshToken()
   if (!refresh) return null
   try {
-    const { data } = await axios.post<{ access_token: string }>('/api/v1/auth/refresh', {
+    // 后端实现 refresh 轮换：旧 token 进黑名单，响应携带新 refresh_token
+    const { data } = await axios.post<RefreshResponse>('/api/v1/auth/refresh', {
       refresh_token: refresh,
     })
-    localStorage.setItem('hra_token', data.access_token)
+    localStorage.setItem(AUTH_KEYS.token, data.access_token)
+    if (data.refresh_token) {
+      localStorage.setItem(AUTH_KEYS.refreshToken, data.refresh_token)
+    }
+    // 同步 Pinia auth store（组件层读取的是 store.token，仅写 localStorage 会导致状态过期）
+    try {
+      const auth = useAuthStore()
+      auth.token = data.access_token
+      if (data.refresh_token) {
+        auth.refreshToken = data.refresh_token
+      }
+    } catch {
+      // pinia 未激活的极端场景：localStorage 已更新，不阻塞刷新流程
+    }
     return data.access_token
   } catch {
     return null
@@ -81,13 +99,11 @@ apiClient.interceptors.response.use(
   }
 )
 
-// 供 SSE 等非 axios 请求复用 token/租户头
+// 供 SSE 等非 axios 请求复用 token（租户上下文由后端从 JWT 解析）
 export function buildAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const token = getAccessToken()
   if (token) headers.Authorization = `Bearer ${token}`
-  const user = getStoredUser<{ tenant_id?: string }>()
-  if (user?.tenant_id) headers['X-Tenant-Id'] = user.tenant_id
   return headers
 }
 

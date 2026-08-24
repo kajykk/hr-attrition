@@ -37,3 +37,6 @@ class User(Base, UUIDPKMixin, TenantMixin, TimestampMixin, SoftDeleteMixin):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_login_ip: Mapped[str | None] = mapped_column(INET, nullable=True)
     failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="登录连续失败锁定截止时间（≥5 次锁 15 分钟）"
+    )

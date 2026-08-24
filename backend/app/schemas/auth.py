@@ -32,8 +32,15 @@ class RefreshRequest(BaseModel):
 
 
 class RefreshResponse(BaseModel):
+    """刷新令牌响应.
+
+    refresh_token：轮换启用后回发的新 refresh token（旧 token 已进黑名单）；
+    兼容旧客户端（字段可空时沿用原 refresh token）。
+    """
+
     access_token: str
     expires_in: int
+    refresh_token: str | None = None
 
 
 class UserOut(BaseModel):

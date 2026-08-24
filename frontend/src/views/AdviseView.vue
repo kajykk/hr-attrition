@@ -2,7 +2,7 @@
 // AI 保留建议视图 - SSE 流式接收 + 打字动画
 import { ref, onMounted, nextTick, useTemplateRef } from 'vue'
 import { apiClient, extractApiError } from '@/api/client'
-import { getAccessToken, getStoredUser } from '@/api/auth-keys'
+import { getAccessToken } from '@/api/auth-keys'
 import type { WarningOut, Paginated, AdviseMetadata } from '@/api/types'
 
 // 演示数据仅限开发环境；生产环境失败展示真实错误
@@ -61,9 +61,7 @@ async function generate() {
   adviceText.value = ''
   metadata.value = null
 
-  const token = getAccessToken() || ''
-  const user = getStoredUser<{ tenant_id?: string }>()
-  const tenantId = user?.tenant_id || ''
+  const token = getAccessToken()
 
   // 构造 query
   const qs = new URLSearchParams()
@@ -72,12 +70,12 @@ async function generate() {
 
   try {
     // 用 fetch + ReadableStream 解析 SSE（不用 EventSource，因为要 POST）
+    // 租户上下文由后端从 JWT 解析（客户端不再自报 X-Tenant-Id）
     const resp = await fetch(`/api/v1/advise/stream?${qs.toString()}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
-        'X-Tenant-Id': tenantId,
       },
     })
     if (!resp.ok || !resp.body) {

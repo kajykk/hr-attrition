@@ -29,12 +29,18 @@ class DriftFeature(BaseModel):
 
 
 class DriftResult(BaseModel):
-    """漂移检测结果（治理视图契约，与前端 DriftResult 对齐）."""
+    """漂移检测结果（治理视图契约，与前端 DriftResult 对齐）.
+
+    data_source 标注 current 分布来源：
+      db:risk_predictions(window=7d) = 线上真实预测输入；
+      csv:fallback:* = 静态降级数据（结果仅供参考）。
+    """
 
     max_psi: float
     critical_features: list[str]
     features: list[DriftFeature]
     computed_at: str
+    data_source: str | None = None
 
 
 class FairnessDimension(BaseModel):
@@ -46,7 +52,11 @@ class FairnessDimension(BaseModel):
 
 
 class FairnessResult(BaseModel):
-    """公平性监测结果（治理视图契约，与前端 FairnessResult 对齐）."""
+    """公平性监测结果（治理视图契约，与前端 FairnessResult 对齐）.
+
+    data_source 标注审计数据来源（当前为训练期静态 CSV，非线上预测流）。
+    """
 
     dimensions: list[FairnessDimension]
     computed_at: str
+    data_source: str | None = None

@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import re
+
 import redis.asyncio as aioredis
 
 from app.core.config import settings
@@ -17,6 +19,16 @@ logger = get_logger(__name__)
 
 # 模块级异步 Redis 客户端单例
 _redis_client: aioredis.Redis | None = None
+
+# 凭据脱敏：redis://user:pass@host → redis://***@host（日志不得泄露凭据）
+_URL_CREDENTIALS_RE = re.compile(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)([^@/?\s]+)@")
+
+
+def mask_url_credentials(url: str | None) -> str:
+    """抹掉 URL 中的凭据段（://user:pass@ → ://***@），用于安全打日志."""
+    if not url:
+        return ""
+    return _URL_CREDENTIALS_RE.sub(r"\g<scheme>***@", url)
 
 
 async def init_redis() -> None:
@@ -36,10 +48,14 @@ async def init_redis() -> None:
         # 测试连通性（PING）
         await client.ping()
         _redis_client = client
-        logger.info("Redis 连接成功 | url=%s", settings.REDIS_URL)
+        logger.info("Redis 连接成功 | url=%s", mask_url_credentials(settings.REDIS_URL))
     except Exception as e:  # noqa: BLE001
         # 降级：连接失败不崩溃，RiskService 检测到 None 跳过缓存
-        logger.warning("Redis 连接失败，降级为无缓存模式 | url=%s | err=%s", settings.REDIS_URL, e)
+        logger.warning(
+            "Redis 连接失败，降级为无缓存模式 | url=%s | err=%s",
+            mask_url_credentials(settings.REDIS_URL),
+            e,
+        )
         _redis_client = None
 
 

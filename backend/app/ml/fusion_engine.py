@@ -20,7 +20,10 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import classification_report, roc_auc_score
 
+from app.core.logging import get_logger
 from app.ml.feature_engineering import load_split
+
+logger = get_logger(__name__)
 
 MODELS_DIR = Path(__file__).resolve().parent / "models"
 STRUCT_MODEL_PATH = MODELS_DIR / "structured_lgbm.pkl"
@@ -78,7 +81,14 @@ class FusionEngine:
 
     @staticmethod
     def _align(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-        """按模型期望的列顺序对齐（缺失列补 0）."""
+        """按模型期望的列顺序对齐（缺失列补 0，保留行为但记录告警）."""
+        missing = [c for c in columns if c not in df.columns]
+        if missing:
+            logger.warning(
+                "特征对齐缺失关键特征列，已补 0（%d 列）| missing=%s",
+                len(missing),
+                missing,
+            )
         return df.reindex(columns=columns, fill_value=0.0)
 
     def fuse(self, X_struct: pd.DataFrame, X_behavior: pd.DataFrame) -> tuple[np.ndarray, dict]:

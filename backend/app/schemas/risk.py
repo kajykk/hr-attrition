@@ -24,6 +24,11 @@ class RiskPredictionOut(BaseModel):
     model_version: str
     predicted_at: datetime
     cached: bool = False
+    behavior_data_source: str | None = Field(
+        default=None,
+        description="行为时序数据来源：demo=当前版本演示数据"
+        "（由 employee.id 播种生成）；real=真实行为日志",
+    )
 
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
