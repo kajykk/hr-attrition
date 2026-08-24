@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     RAG_RERANK_MODEL: str = "gte-rerank"
     RAG_RERANK_TIMEOUT_MS: int = 800
     RAG_MIN_SCORE: float = 0.012  # RRF 尺度：单路第 1 名≈1/61≈0.016；低于 0.012 视为无可信命中 → 拒答
-    RAG_MIN_COSINE: float = 0.10  # 拒答双信号①：查询-最优块语义相似度下限
+    RAG_MIN_COSINE: float = 0.62  # 拒答双信号①：查询-最优块语义相似度下限（按 text-embedding-v3 标定：可答组 min 0.638 / 不可答组 max 0.613）
     RAG_MIN_COVERAGE: float = 0.26  # 拒答双信号②：查询词元被最优块覆盖的比例下限
     RAG_CHUNK_TOKENS: int = 512
     RAG_CHUNK_OVERLAP: int = 64
