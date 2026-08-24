@@ -22,17 +22,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import delete, func, select  # noqa: E402
-from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.db.session import async_session_factory  # noqa: E402
-from app.kb.chunker import split_document  # noqa: E402
-from app.kb.embedding_client import embed_texts  # noqa: E402
-from app.kb.parsers import RawSection, parse_markdown  # noqa: E402
-from app.kb.retriever import hybrid_search  # noqa: E402
-from app.kb.service import scan_and_mask_pii  # noqa: E402
-from app.kb.tokenizer_zh import tokenize_for_index  # noqa: E402
-from app.models.kb import KBChunk, KBDocument  # noqa: E402
+from app.db.session import async_session_factory
+from app.kb.chunker import split_document
+from app.kb.embedding_client import embed_texts
+from app.kb.parsers import RawSection, parse_markdown
+from app.kb.retriever import hybrid_search
+from app.kb.service import scan_and_mask_pii
+from app.kb.tokenizer_zh import tokenize_for_index
+from app.models.kb import KBChunk, KBDocument
 
 
 def _load_golden(path: Path) -> list[dict]:

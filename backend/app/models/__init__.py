@@ -2,6 +2,7 @@
 import logging
 
 from app.models.audit_log import AuditLog
+from app.models.behavior_event import BehaviorEvent
 from app.models.department import Department
 from app.models.employee import Employee
 from app.models.risk_prediction import RiskPrediction
@@ -19,6 +20,7 @@ except ImportError:
 
 __all__ = [
     "AuditLog",
+    "BehaviorEvent",
     "Department",
     "Employee",
     "KBChunk",

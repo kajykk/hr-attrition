@@ -162,7 +162,8 @@ class RiskService:
           0. 检查 Kill Switch（W5 新增）：激活则返回安全降级结果
           1. 检查 Redis 缓存，命中且非 force_refresh → 返回（cached=True）
           2. 从 DB 查 Employee（含 tenant_id 隔离）
-          3. feature_provider.build_features(employee)
+          3. feature_provider.build_structured_features + build_behavior_features_from_events
+             （行为模态优先真实 behavior_events 聚合，不足回退 demo，来源见返回值）
           4. FusionEngine.predict(structured, behavior)
           5. 写入 risk_predictions 表
           6. 同步触发 ShapExplainer.explain（D03 ADR-004）
@@ -234,12 +235,16 @@ class RiskService:
 
         # 3. 构造特征（先校验训练/推理特征契约，防漂移）
         from app.ml.feature_provider import (
-            BEHAVIOR_DATA_SOURCE_DEMO,
             assert_feature_contract,
-            build_features,
+            build_behavior_features_from_events,
+            build_structured_features,
         )
         assert_feature_contract()
-        structured_df, behavior_df = build_features(employee)
+        structured_df = build_structured_features(employee)
+        # 行为模态：优先近 30 天 behavior_events 真实聚合（real），不足回退 demo
+        behavior_df, behavior_data_source = await build_behavior_features_from_events(
+            db, tenant_id, employee
+        )
 
         # 4. 调用 FusionEngine 预测（CPU 密集 → to_thread，避免阻塞事件循环；失败降级为占位）
         engine = _get_fusion_engine()
@@ -296,7 +301,7 @@ class RiskService:
             "predicted_at": now.isoformat(),
             "cached": False,
             "shap_factors": shap_factors,
-            "behavior_data_source": BEHAVIOR_DATA_SOURCE_DEMO,
+            "behavior_data_source": behavior_data_source,
         }
 
         # 7. 写 Redis 缓存（降级：失败仅 log warning）

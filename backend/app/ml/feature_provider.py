@@ -13,8 +13,9 @@ P0-4 特征真实化：
   - 缺失（None）时回退为训练分布中位/众数常量（_FEATURE_DEFAULTS），
     **不再使用确定性伪随机数**，消除"预测由随机数主导"
   - salary_percentile 统一为 0-1 分位：DB 存 0-100，推理乘 SALARY_PERCENTILE_SCALE
-  - 行为特征：当前无真实行为采集通道，保留特征工程同分布构造（演示模式），
-    生产接入真实时序后应替换为真实数据（见 README 说明）
+  - 行为特征：优先读近 30 天 behavior_events 真实聚合（build_behavior_features_from_events，
+    返回 source="real"）；无数据/不足阈值时回退训练同分布构造（demo 模式）。
+    风险预测 API 响应以 behavior_data_source 字段标注来源（README 路线图第一步）
 
 特征契约（与 T-302 训练侧对齐，防推理/训练定义漂移）：
   - 列名与列顺序必须等于训练元数据 feature_metadata.pkl 中 structured_feature_columns。
@@ -40,10 +41,22 @@ from app.ml.feature_engineering import (
 # DB 百分位（0-100）→ 模型输入分位（0-1）的换算系数（显式契约，训练侧同理）
 SALARY_PERCENTILE_SCALE = 0.01
 
-# 行为模态数据来源标识：当前无真实行为采集通道，行为时序为 demo 数据
-# （由 employee.id 播种确定性生成），风险预测 API 响应以该值标注来源；
-# 接入真实行为日志后应改为 "real"（路线图项，见 README）。
+# 行为模态数据来源标识：真实行为事件聚合 → "real"；无数据/不足阈值回退 → "demo"。
+# 风险预测 API 响应以 behavior_data_source 字段标注来源。
 BEHAVIOR_DATA_SOURCE_DEMO = "demo"
+BEHAVIOR_DATA_SOURCE_REAL = "real"
+
+# ===== 行为事件真实模态（README 路线图第一步） =====
+# 近 30 天 behavior_events 聚合窗口与最低事件数阈值：
+# 聚合事件总数低于阈值时视为信号不足，回退 demo 模式（避免极少量噪声主导特征）。
+BEHAVIOR_WINDOW_DAYS = 30
+BEHAVIOR_EVENTS_MIN_THRESHOLD = 5
+
+# 计数归一化的训练分布量纲参考（与 demo 模式 base 区间一致，防特征量纲漂移）
+_BEHAVIOR_COUNT_RANGE = {
+    "email_count": (50.0, 200.0),
+    "login_count": (20.0, 80.0),
+}
 
 _MODELS_DIR = Path(__file__).resolve().parent / "models"
 _FEATURE_METADATA_PATH = _MODELS_DIR / "feature_metadata.pkl"
@@ -320,12 +333,39 @@ def build_structured_features(employee) -> pd.DataFrame:
     return df
 
 
+def _extract_series_stats(values) -> dict[str, float]:
+    """从 12 点时序提取 4 个统计量（与 feature_engineering.engineer_behavior 对齐）.
+
+    列名契约：{prefix}_trend_slope / {prefix}_mean / {prefix}_std /
+    {prefix}_recent_change_rate（demo 与真实两条路径共用，保证维度一致）。
+    """
+    import numpy as np
+
+    values = np.asarray(values, dtype=float)
+    x = np.arange(1, N_MONTHS + 1, dtype=float)
+    x_centered = x - x.mean()
+    x_ss = float((x_centered ** 2).sum())  # 143.0
+
+    y_mean = values.mean()
+    slope = float((x_centered * (values - y_mean)).sum() / x_ss)
+    mean = float(values.mean())
+    std = float(values.std())
+    first9 = values[:9].mean()
+    last3 = values[9:].mean()
+    change_rate = float((last3 - first9) / (first9 + 1e-6))
+    return {
+        "trend_slope": slope,
+        "mean": mean,
+        "std": std,
+        "recent_change_rate": change_rate,
+    }
+
+
 def build_behavior_features(employee) -> pd.DataFrame:
     """构造单员工的行为统计特征 DataFrame（12 列 = 3 指标 × 4 统计量）.
 
-    ⚠️ 演示模式（P0-4）：当前无真实行为采集通道（无邮件/会议/登录日志表），
-    按训练侧同分布构造确定性时序，仅供演示。生产环境接入真实行为数据后，
-    应改为读取真实 12 月时序（保留相同的统计量提取逻辑）。
+    ⚠️ demo 模式回退路径：无真实行为事件（或不足阈值）时按训练侧同分布构造
+    确定性时序。真实模式见 build_behavior_features_from_events。
 
     行为指标：email_count / meeting_decline_rate / login_count
     每个指标生成 12 个月时序，再提取：
@@ -360,27 +400,145 @@ def build_behavior_features(employee) -> pd.DataFrame:
             base = float(rng.randint(20, 80))
             series_data[prefix] = base + rng.normal(0, 5, N_MONTHS).cumsum() * 0.2
 
-    # 提取 4 个统计量（复用 feature_engineering.engineer_behavior 逻辑）
-    x = np.arange(1, N_MONTHS + 1, dtype=float)
-    x_centered = x - x.mean()
-    x_ss = float((x_centered ** 2).sum())  # 143.0
+    # 提取 4 个统计量（复用共享 helper，与真实路径维度一致）
+    feats: dict[str, float] = {}
+    for prefix in BEHAVIOR_SERIES:
+        stats = _extract_series_stats(series_data[prefix])
+        for stat, value in stats.items():
+            feats[f"{prefix}_{stat}"] = value
+
+    return pd.DataFrame([feats])
+
+
+async def build_behavior_features_from_events(db, tenant_id, employee) -> tuple[pd.DataFrame, str]:
+    """行为特征真实模式：优先读近 30 天 behavior_events 聚合.
+
+    聚合逻辑（简单特征向量，维度对齐现有 12 列契约）：
+      - 按 天 × event_type 计数，30 天切 12 个窗口（每窗口约 2-3 天）
+      - login_count / email_count：窗口计数 → 归一化到训练分布量纲区间
+      - meeting_decline_rate：窗口内 declines / meetings（无会议时用整体比率填充）
+      - 复用 demo 路径同一统计量提取（4 统计量 × 3 指标 = 12 列）
+
+    回退策略（返回 source="demo"）：
+      - 查询异常（表不存在/DB 故障等）
+      - 近 30 天聚合事件总数 < BEHAVIOR_EVENTS_MIN_THRESHOLD
+      - 无任何可映射事件类型
+
+    Args:
+        db: 异步数据库会话。
+        tenant_id: 租户 ID（应用层显式过滤，ADR-002）。
+        employee: Employee ORM 实例（仅用于回退 demo 路径播种）。
+
+    Returns:
+        (behavior_df, source) — source ∈ {"real", "demo"}。
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import func, select
+
+    from app.models.behavior_event import BehaviorEvent
+
+    try:
+        cutoff = datetime.now(UTC) - timedelta(days=BEHAVIOR_WINDOW_DAYS)
+        day_bucket = func.date_trunc("day", BehaviorEvent.occurred_at)
+        stmt = (
+            select(
+                day_bucket.label("day"),
+                BehaviorEvent.event_type.label("event_type"),
+                func.count().label("cnt"),
+            )
+            .where(
+                BehaviorEvent.tenant_id == tenant_id,
+                BehaviorEvent.employee_id == _attr(employee, "id"),
+                BehaviorEvent.occurred_at >= cutoff,
+            )
+            .group_by(day_bucket, BehaviorEvent.event_type)
+        )
+        rows = (await db.execute(stmt)).all()
+    except Exception as e:  # noqa: BLE001
+        # 查询失败（如表尚未迁移/DB 故障）→ 回退 demo，不阻断预测主流程
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "behavior_events 聚合查询失败，回退 demo 行为特征 | err=%s", e
+        )
+        return build_behavior_features(employee), BEHAVIOR_DATA_SOURCE_DEMO
+
+    # 展开为 天索引 → {event_type: count}（day 为 date_trunc 结果，取日期序号）
+    from app.services.behavior_service import (
+        EVENT_EMAIL,
+        EVENT_LOGIN,
+        EVENT_MEETING,
+        EVENT_MEETING_DECLINE,
+    )
+
+    daily: dict[int, dict[str, int]] = {}
+    total_events = 0
+    known_types = {EVENT_LOGIN, EVENT_EMAIL, EVENT_MEETING, EVENT_MEETING_DECLINE}
+    now = datetime.now(UTC)
+    for row in rows:
+        day, event_type, cnt = row[0], row[1], int(row[2])
+        if event_type not in known_types:
+            continue
+        day_index = (now.date() - day.date()).days  # 0=今天，29=30 天前
+        if not (0 <= day_index < BEHAVIOR_WINDOW_DAYS):
+            continue
+        daily.setdefault(day_index, {})[event_type] = daily.get(day_index, {}).get(event_type, 0) + cnt
+        total_events += cnt
+
+    # 无数据或不足阈值 → 回退 demo
+    if total_events < BEHAVIOR_EVENTS_MIN_THRESHOLD:
+        return build_behavior_features(employee), BEHAVIOR_DATA_SOURCE_DEMO
+
+    def _window_of(day_index: int) -> int:
+        """30 天 → 12 窗口（每窗口 2-3 天），窗口 11 最旧、窗口 0 最新."""
+        return min(N_MONTHS - 1, day_index * N_MONTHS // BEHAVIOR_WINDOW_DAYS)
+
+    login_wins = [0] * N_MONTHS
+    email_wins = [0] * N_MONTHS
+    decline_wins = [0] * N_MONTHS
+    meeting_wins = [0] * N_MONTHS
+    for day_index, counts in daily.items():
+        w = _window_of(day_index)
+        login_wins[w] += counts.get(EVENT_LOGIN, 0)
+        email_wins[w] += counts.get(EVENT_EMAIL, 0)
+        decline_wins[w] += counts.get(EVENT_MEETING_DECLINE, 0)
+        meeting_wins[w] += counts.get(EVENT_MEETING, 0)
+
+    def _scale_counts_to_range(counts: list[int], lo: float, hi: float):
+        """计数归一化到训练分布量纲区间（防特征量纲相对训练侧漂移）."""
+        import numpy as np
+
+        arr = np.asarray(counts, dtype=float)
+        mx = arr.max()
+        if mx <= 0:
+            return np.full(N_MONTHS, (lo + hi) / 2.0)
+        return lo + (arr / mx) * (hi - lo)
+
+    overall_rate = (
+        sum(decline_wins) / max(sum(meeting_wins) + sum(decline_wins), 1)
+        if sum(meeting_wins) + sum(decline_wins) > 0
+        else 0.1
+    )
+
+    series_data: dict[str, list[float]] = {
+        "email_count": _scale_counts_to_range(email_wins, *_BEHAVIOR_COUNT_RANGE["email_count"]),
+        "login_count": _scale_counts_to_range(login_wins, *_BEHAVIOR_COUNT_RANGE["login_count"]),
+        "meeting_decline_rate": [
+            (decline_wins[i] / max(meeting_wins[i] + decline_wins[i], 1))
+            if (meeting_wins[i] + decline_wins[i]) > 0
+            else overall_rate
+            for i in range(N_MONTHS)
+        ],
+    }
 
     feats: dict[str, float] = {}
     for prefix in BEHAVIOR_SERIES:
-        values = series_data[prefix]  # (12,)
-        y_mean = values.mean()
-        slope = float((x_centered * (values - y_mean)).sum() / x_ss)
-        mean = float(values.mean())
-        std = float(values.std())
-        first9 = values[:9].mean()
-        last3 = values[9:].mean()
-        change_rate = float((last3 - first9) / (first9 + 1e-6))
-        feats[f"{prefix}_trend_slope"] = slope
-        feats[f"{prefix}_mean"] = mean
-        feats[f"{prefix}_std"] = std
-        feats[f"{prefix}_recent_change_rate"] = change_rate
+        stats = _extract_series_stats(series_data[prefix])
+        for stat, value in stats.items():
+            feats[f"{prefix}_{stat}"] = value
 
-    return pd.DataFrame([feats])
+    return pd.DataFrame([feats]), BEHAVIOR_DATA_SOURCE_REAL
 
 
 def build_features(employee) -> tuple[pd.DataFrame, pd.DataFrame]:

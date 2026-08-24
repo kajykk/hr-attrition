@@ -163,6 +163,10 @@ async def update_warning_status(
     )
     db.add(event)
     await db.flush()
+    # 行为特征基建（README 路线图第一步）：状态流转记 warning_transition 事件
+    # （best-effort，内部失败降级跳过，不阻断预警处理）
+    from app.services.behavior_service import record_warning_transition_event
+    await record_warning_transition_event(db, w, operator_id, from_status, to_status)
     await db.refresh(w)
 
     # 审计日志（P2-10）
@@ -229,6 +233,9 @@ async def appeal_warning(
     )
     db.add(event)
     await db.flush()
+    # 行为特征基建：申诉也是状态流转，记 warning_transition 事件（best-effort）
+    from app.services.behavior_service import record_warning_transition_event
+    await record_warning_transition_event(db, w, operator_id, from_status, to_status)
     await db.refresh(w)
 
     # 审计日志（P2-10）

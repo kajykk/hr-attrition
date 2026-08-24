@@ -170,11 +170,15 @@ async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depe
         await _log_auth_event(db, user, "auth.login_failed", reason="invalid_totp", commit=True)
         raise
 
-    # 登录成功：重置失败计数/锁定 + 更新 last_login_at + 写审计
+    # 登录成功：重置失败计数/锁定 + 更新 last_login_at + 写审计 + 行为事件（login）
     user.failed_login_count = 0
     user.locked_until = None
     user.last_login_at = datetime.now(UTC)
     await _log_auth_event(db, user, "auth.login")
+    # 行为特征基建（README 路线图第一步）：登录成功记 login 事件（best-effort，
+    # 内部按租户 email 匹配员工，未匹配/失败均降级跳过，不阻断登录）
+    from app.services.behavior_service import record_login_event_for_user
+    await record_login_event_for_user(db, user)
     await db.flush()
 
     access = create_access_token(str(user.id), str(user.tenant_id), user.role)
