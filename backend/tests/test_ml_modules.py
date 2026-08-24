@@ -287,6 +287,14 @@ def test_engineer_behavior_statistical_values_finite():
     assert np.isfinite(feats.to_numpy()).all(), "行为特征含 inf"
 
 
+_TRAIN_ARTIFACT_METADATA = Path(__file__).resolve().parents[1] / "app" / "ml" / "models" / "feature_metadata.pkl"
+_requires_trained_artifacts = pytest.mark.skipif(
+    not _TRAIN_ARTIFACT_METADATA.exists(),
+    reason="需要本地训练产物 feature_metadata.pkl（CI 不产出，本地 train_pipeline 后存在）",
+)
+
+
+@_requires_trained_artifacts
 def test_load_split_returns_all_dataframes():
     """load_split 应返回 6 个特征/标签 DataFrame + audit_test + metadata."""
     data = load_split()
@@ -313,6 +321,7 @@ def test_load_split_returns_all_dataframes():
     assert meta["structured_feature_columns"] == STRUCTURED_FEATURE_COLUMNS
 
 
+@_requires_trained_artifacts
 def test_load_split_audit_test_contains_pii_audit_fields():
     """audit_test 应含 gender/ethnicity/disability/age_derived 审计字段."""
     data = load_split()
