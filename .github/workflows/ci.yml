@@ -3,7 +3,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/rag-kb]
   pull_request:
 
 # 同分支新推送取消过时运行，省额度
