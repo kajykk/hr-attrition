@@ -40,6 +40,18 @@
 
 训练数据：以 IBM 员工数据分布为蓝本，SDV GaussianCopula 合成 50,000 条（含 12 个月行为时序），标签生成严格排除性别/民族/残障等敏感字段，从源头保障公平性。
 
+## 行为特征数据源
+
+行为模态特征的真实数据链路由 `behavior_events` 行为事件表（0005 迁移）承载：
+
+| 环节 | 说明 |
+|---|---|
+| 事件表 | `behavior_events`：tenant_id + employee_id + event_type + payload + occurred_at，复合索引 `ix_behavior_events_tenant_emp_time`（tenant 打头、occurred_at DESC）支撑近 30 天窗口查询 |
+| 事件来源 | **登录成功**（auth.py）记 `login` 事件——User 与 Employee 无外键，按租户内 email best-effort 匹配员工，未匹配则跳过；**预警状态流转**（warnings.py，含申诉路径）记 `warning_transition` 事件。写入均为 best-effort：失败仅告警，不阻断业务 |
+| 聚合方式 | 按「天 × event_type」计数，30 天切 12 个窗口（每窗口约 2-3 天），供 IsolationForest 行为模态推理（ml/feature_provider.py） |
+| real/demo 判定 | 近 30 天聚合事件总数 ≥ 5 条 → 真实模式；**< 5 条回退 demo 构造**（由 employee.id 播种确定性生成，无随机注入） |
+| 来源标注 | 风险预测 API 响应以 `behavior_data_source` 字段暴露实际来源：`"real"`（真实事件聚合）/ `"demo"`（演示回退） |
+
 ## 系统架构
 
 ```
