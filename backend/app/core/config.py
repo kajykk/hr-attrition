@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     PII_FERNET_KEY: str = "change-me-generate-fernet-key"
     PII_KEY_ROTATION_DAYS: int = 90
 
+    # PII 历史密钥（逗号分隔，新→旧）：仅用于解密存量密文的回退链，
+    # 加密与哈希派生始终使用 PII_FERNET_KEY。重加密迁移完成后应清空。
+    # 轮换操作见 backend/scripts/rotate_pii_key.py。
+    PII_PREVIOUS_KEYS: str = ""
+
     # PII 检索哈希 pepper（HMAC-SHA256）。缺失时从 PII_FERNET_KEY 派生并告警。
     # 注意：更换 pepper 会使存量 *_hash 索引失效，需离线重算迁移。
     PII_HASH_PEPPER: str = ""

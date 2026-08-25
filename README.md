@@ -129,6 +129,10 @@ cp .env.example .env
 .venv\Scripts\python.exe -m app.ml.train_pipeline
 ```
 
+**密钥轮换（secrets rotation）**：PII 主钥轮换时，将新钥写入 `PII_FERNET_KEY`、旧钥填入 `PII_PREVIOUS_KEYS`（逗号分隔、新→旧），解密自动回退旧钥（日志标记 `legacy_key_used`），加密/哈希始终用主钥。
+
+存量数据迁移：运行 `cd backend && python scripts/rotate_pii_key.py --dry-run` 预检后去掉 `--dry-run` 批量重加密员工 PII 列（分批 commit），完成后清空 `PII_PREVIOUS_KEYS`。
+
 ## 测试与质量
 
 **288+ 测试用例**（12 个测试文件，覆盖真实应用注入）：
