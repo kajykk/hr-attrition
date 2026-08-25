@@ -40,9 +40,9 @@ async def _embed_batch_with_cache(texts: list[str]) -> list[list[float]]:
 
     redis = None
     try:
-        from app.core.redis import get_redis
+        from app.core.redis import get_redis_binary
 
-        redis = get_redis()
+        redis = get_redis_binary()
     except Exception:  # noqa: BLE001
         logger.debug("Redis 不可用，embedding 缓存降级为直连")
 

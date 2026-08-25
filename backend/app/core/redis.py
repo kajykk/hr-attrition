@@ -78,3 +78,31 @@ def get_redis() -> aioredis.Redis | None:
         Redis 实例；未初始化或连接失败时返回 None（调用方需自行处理 None）。
     """
     return _redis_client
+
+
+# 二进制安全客户端单例（decode_responses=False）
+_binary_client: aioredis.Redis | None = None
+
+
+def get_redis_binary() -> aioredis.Redis | None:
+    """返回二进制安全（decode_responses=False）的 Redis 客户端.
+
+    用途：文件字节缓存（rag:file:*）、embedding 向量（struct.pack 二进制）等
+    非文本值。共享客户端开启 decode_responses=True 时：
+      - GET 二进制值会因 UTF-8 解码失败抛异常；
+      - GET 文本值返回 str，调用方若按 bytes 处理会得到 'str' has no 'decode' 类错误。
+
+    懒创建：from_url 不立即建连，首次命令才拨号；创建异常返回 None 由调用方降级。
+    """
+    global _binary_client
+    if _binary_client is None:
+        try:
+            _binary_client = aioredis.from_url(
+                settings.REDIS_URL,
+                encoding="utf-8",
+                decode_responses=False,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Redis 二进制客户端创建失败 | err=%s", e)
+            return None
+    return _binary_client

@@ -114,7 +114,11 @@ async def upload_document(
     await session.flush()
     doc_id = str(doc.id)
 
-    redis = await _get_redis_or_fail()
+    redis = _get_redis_binary()
+    if redis is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=503, detail="存储队列不可用，请稍后重试")
     try:
         await redis.set(f"rag:file:{doc_id}", data, ex=FILE_CACHE_TTL_SECONDS)
     except Exception as e:
@@ -154,7 +158,7 @@ async def finalize_index(document_id: str) -> dict:
             return {"status": "missing"}
 
         raw = None
-        redis = await _get_redis_soft()
+        redis = _get_redis_binary()
         if redis is not None:
             try:
                 raw = await redis.get(f"rag:file:{document_id}")
@@ -324,9 +328,25 @@ def _session_factory():
 
 async def _get_redis_soft():
     try:
-        from app.core.redis import get_redis
+        from app.core.redis import get_redis, init_redis
 
-        return get_redis()
+        redis = get_redis()
+        if redis is None:
+            # Celery Worker 不经过 FastAPI lifespan，首次使用时惰性初始化
+            # （init_redis 内部吞掉连接异常并保持 None 语义）
+            await init_redis()
+            redis = get_redis()
+        return redis
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _get_redis_binary():
+    """二进制安全客户端（文件字节缓存专用，decode_responses=False）."""
+    try:
+        from app.core.redis import get_redis_binary
+
+        return get_redis_binary()
     except Exception:  # noqa: BLE001
         return None
 
