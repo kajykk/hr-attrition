@@ -85,9 +85,13 @@ function stopPolling() {
 }
 
 async function removeDoc(doc: KbDocument) {
-  await ElMessageBox.confirm(`确认删除《${doc.title}》及其全部切片？`, '删除确认', {
-    type: 'warning',
-  })
+  try {
+    await ElMessageBox.confirm(`确认删除《${doc.title}》及其全部切片？`, '删除确认', {
+      type: 'warning',
+    })
+  } catch {
+    return // 用户取消
+  }
   try {
     await deleteDocument(doc.id)
     ElMessage.success('已删除')
@@ -195,16 +199,23 @@ onBeforeUnmount(stopPolling)
       >
         <el-table-column prop="title" label="标题" min-width="140" show-overflow-tooltip />
         <el-table-column label="状态" width="80">
-          <template #default="{ row }">
-            <el-tag :type="statusType[row.status]" size="small">
-              {{ statusLabel[row.status] ?? row.status }}
+          <template #default="scope">
+            <el-tag v-if="scope?.row" :type="statusType[scope.row.status]" size="small">
+              {{ statusLabel[scope.row.status] ?? scope.row.status }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="chunk_count" label="切片" width="60" />
         <el-table-column label="" width="50">
-          <template #default="{ row }">
-            <el-button link type="danger" size="small" @click="removeDoc(row)">删</el-button>
+          <template #default="scope">
+            <el-button
+              v-if="scope?.row"
+              link
+              type="danger"
+              size="small"
+              @click="removeDoc(scope.row)"
+              >删</el-button
+            >
           </template>
         </el-table-column>
       </el-table>
