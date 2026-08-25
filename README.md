@@ -20,7 +20,7 @@
 |---|---|
 | **多模态融合预测** | 结构化（LightGBM，AUC 0.9353）+ 行为时序（IsolationForest）融合评分（0.7 / 0.3），**测试 AUC 0.9862**，Top-20% 离职召回 0.8832 |
 | **可解释 AI** | SHAP TreeExplainer 个体预测 Top-3 归因（方向 + 贡献值），30 天全局 Top-10 特征画像，特征契约校验（推理与训练特征一致性） |
-| **特征真实性** | 结构化模态完全由真实数据驱动：推理侧 20 项结构化特征**真实字段优先**（HR 采集），缺失回退训练分布中位/众数常量，无随机注入（0002 迁移）。行为模态已具备真实数据通道（0005 迁移 `behavior_events` 行为事件表）：登录成功记 `login`、预警状态流转记 `warning_transition` 事件，行为特征优先近 30 天真实聚合（风险 API 响应以 `behavior_data_source: "real"` 标注）；近 30 天无事件/不足阈值时回退 demo 构造（由 employee.id 播种确定性生成，见 ml/feature_provider.py，以 `behavior_data_source: "demo"` 标注） |
+| **特征真实性** | 结构化模态完全由真实数据驱动：推理侧 20 项结构化特征**真实字段优先**（HR 采集），缺失回退训练分布中位/众数常量，无随机注入（0002 迁移）。行为模态已具备真实数据通道（0005 迁移 `behavior_events` 行为事件表）：登录成功记 `login`、预警状态流转记 `warning_transition`、预测查看记 `risk_prediction_viewed`、报表导出记 `report_exported` 事件，行为特征优先近 30 天真实聚合（风险 API 响应以 `behavior_data_source: "real"` 标注）；近 30 天无事件/不足阈值时回退 demo 构造（由 employee.id 播种确定性生成，见 ml/feature_provider.py，以 `behavior_data_source: "demo"` 标注） |
 | **分级预警闭环** | P0/P1/P2 三级预警 + 状态机（new→confirmed→review→fixing→closed / appealing），24h/48h/72h 升级机制，P0 强制处置路径 |
 | **模型治理** | PSI/KL 逐特征漂移检测（0.1/0.2 阈值）；性别/年龄/民族/残障**四维公平性监测**（差异 >8% 自动触发）；Kill Switch 一键熔断降级（返回安全基线预测） |
 | **隐私与合规** | Fernet **字段级加密**（姓名/身份证/手机号/薪资等 6 字段）+ SHA256 检索哈希 + 季度密钥轮换；PIPL 数据保留清理（离职 ≥2 年自动清除）；AI 提示词 PII 脱敏 |
@@ -47,7 +47,7 @@
 | 环节 | 说明 |
 |---|---|
 | 事件表 | `behavior_events`：tenant_id + employee_id + event_type + payload + occurred_at，复合索引 `ix_behavior_events_tenant_emp_time`（tenant 打头、occurred_at DESC）支撑近 30 天窗口查询 |
-| 事件来源 | **登录成功**（auth.py）记 `login` 事件——User 与 Employee 无外键，按租户内 email best-effort 匹配员工，未匹配则跳过；**预警状态流转**（warnings.py，含申诉路径）记 `warning_transition` 事件。写入均为 best-effort：失败仅告警，不阻断业务 |
+| 事件来源 | **登录成功**（auth.py）记 `login` 事件——User 与 Employee 无外键，按租户内 email best-effort 匹配员工，未匹配则跳过；**预警状态流转**（warnings.py，含申诉路径）记 `warning_transition` 事件；**风险预测查看**（risk.py GET /risk/employees/{id}）记 `risk_prediction_viewed` 事件；**风险报表导出**（risk.py POST /risk/reports/export）记 `report_exported` 事件（同样按登录账号 email 匹配员工，未匹配则跳过，HR 管理账号不污染行为特征）。写入均为 best-effort：失败仅告警，不阻断业务 |
 | 聚合方式 | 按「天 × event_type」计数，30 天切 12 个窗口（每窗口约 2-3 天），供 IsolationForest 行为模态推理（ml/feature_provider.py） |
 | real/demo 判定 | 近 30 天聚合事件总数 ≥ 5 条 → 真实模式；**< 5 条回退 demo 构造**（由 employee.id 播种确定性生成，无随机注入） |
 | 来源标注 | 风险预测 API 响应以 `behavior_data_source` 字段暴露实际来源：`"real"`（真实事件聚合）/ `"demo"`（演示回退） |

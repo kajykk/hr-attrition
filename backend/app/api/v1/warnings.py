@@ -16,7 +16,11 @@ from app.models.user import (
     ROLE_HRBP,
     User,
 )
-from app.models.warning import WarningEvent, WarningRecord
+from app.models.warning import (
+    STATUS_APPEALING,
+    WarningEvent,
+    WarningRecord,
+)
 from app.schemas.warning import (
     ALLOWED_MARK_TYPES,
     AppealRequest,
@@ -26,7 +30,7 @@ from app.schemas.warning import (
     WarningStatusUpdate,
 )
 from app.services.audit_service import append_audit_log
-from app.services.warning_service import WarningService
+from app.services.warning_service import AppealLimitExceeded, WarningService
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -124,24 +128,35 @@ async def update_warning_status(
     """状态机转换（D05 3.4 PATCH /warnings/{id}/status + D04 4.3）.
 
     仅 HR 角色（admin/hr_manager/hrbp）可执行；操作人取自认证用户而非客户端。
-    转换合法性由 WarningService.transition 校验：
+    转换统一走 WarningService.apply_transition：
+      - SELECT ... FOR UPDATE 行锁 + 唯一索引冲突 retry 一次（并发安全）
       - P0：confirmed → review → fixing（FR-LOOP-004 强制复核）
       - P1/P2：confirmed → fixing（直转）
       - 非法转换抛 ValueError，API 返回 422
+      - appealing 入口受申诉次数上限约束（>=3 次返回 409）
     """
     tenant_id = get_current_tenant_id()
-    stmt = select(WarningRecord).where(
+
+    # 预检：404 语义前置 + appealing 入口申诉次数上限（409）
+    precheck_stmt = select(WarningRecord).where(
         WarningRecord.id == warning_id,
         WarningRecord.tenant_id == tenant_id,
     )
-    w = (await db.execute(stmt)).scalar_one_or_none()
-    if w is None:
+    existing = (await db.execute(precheck_stmt)).scalar_one_or_none()
+    if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
+    if payload.target_status == STATUS_APPEALING:
+        try:
+            WarningService.check_appeal_limit(existing)
+        except AppealLimitExceeded as e:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     operator_id = user.id  # 操作人从认证用户派生（防审计伪造）
     try:
-        from_status, to_status = WarningService.transition(
-            warning=w,
+        result = await WarningService.apply_transition(
+            db=db,
+            tenant_id=tenant_id,
+            warning_id=warning_id,
             target_status=payload.target_status,
             operator_id=operator_id,
             comment=payload.comment,
@@ -149,6 +164,12 @@ async def update_warning_status(
     except ValueError as e:
         # 非法状态转换（约束 7）
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
+    w, from_status, to_status = result
+
+    if to_status == STATUS_APPEALING:
+        w.appeal_count = (w.appeal_count or 0) + 1
 
     # 记录事件（审计追溯）
     event = WarningEvent(
@@ -192,17 +213,24 @@ async def appeal_warning(
     """发起申诉（POST /warnings/{id}/appeal）.
 
     校验当前状态允许转 appealing（用 WarningService.validate_transition），
-    复用 PATCH /status 的逻辑（target_status="appealing"）。
+    转换统一走 apply_transition（FOR UPDATE 行锁 + 冲突 retry）。
+    申诉次数上限：appeal_count >= 3 次拒绝，返回 409「申诉次数已达上限」。
     非法转换（如 closed → appealing）返回 422。
     """
     tenant_id = get_current_tenant_id()
-    stmt = select(WarningRecord).where(
+    precheck_stmt = select(WarningRecord).where(
         WarningRecord.id == warning_id,
         WarningRecord.tenant_id == tenant_id,
     )
-    w = (await db.execute(stmt)).scalar_one_or_none()
-    if w is None:
+    existing = (await db.execute(precheck_stmt)).scalar_one_or_none()
+    if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
+
+    # 申诉次数上限（409 语义）
+    try:
+        WarningService.check_appeal_limit(existing)
+    except AppealLimitExceeded as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     # 拼接申诉理由作为备注
     comment = f"[申诉] {payload.reason}"
@@ -211,14 +239,21 @@ async def appeal_warning(
 
     operator_id = user.id  # 操作人从认证用户派生（防审计伪造）
     try:
-        from_status, to_status = WarningService.transition(
-            warning=w,
+        result = await WarningService.apply_transition(
+            db=db,
+            tenant_id=tenant_id,
+            warning_id=warning_id,
             target_status="appealing",
             operator_id=operator_id,
             comment=comment,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
+    w, from_status, to_status = result
+
+    w.appeal_count = (w.appeal_count or 0) + 1
 
     # 记录事件（action=appealing，审计追溯）
     event = WarningEvent(

@@ -44,6 +44,9 @@ _CACHE_TTL_SECONDS = 3600
 # 全局解释聚合上限（防全表加载，超量取最近 N 条）
 _GLOBAL_EXPLAIN_MAX_RECORDS = 20000
 
+# 建警风险分阈值：>= 60（P1 下界）才联动建警，占位/低分不产生预警
+_WARNING_CREATION_MIN_SCORE = 60
+
 
 # ===== 模块级懒加载单例（避免每次请求加载模型） =====
 _fusion_engine = None
@@ -325,6 +328,28 @@ class RiskService:
             )
         except Exception as e:  # noqa: BLE001
             logger.debug("WebSocket 广播失败（不影响主流程） | err=%s", e)
+
+        # 9. 分级预警联动建警（防重复建警，best-effort 不影响预测主流程）：
+        #    风险分 >= 60 时按 level_from_score 分级，create_warning 内部
+        #    先查同员工未关闭同级预警 → 跳过/升级合并/新建
+        if risk_score >= _WARNING_CREATION_MIN_SCORE:
+            try:
+                from app.services.warning_service import SYSTEM_OPERATOR_ID, WarningService
+
+                await WarningService.create_warning(
+                    db=db,
+                    tenant_id=tenant_id,
+                    employee_id=employee_id,
+                    level=WarningService.level_from_score(risk_score),
+                    risk_score=risk_score,
+                    prediction_id=prediction_id if isinstance(prediction_id, UUID) else None,
+                    message=f"风险预测触发：risk_score={risk_score} ({risk_level})",
+                    operator_id=SYSTEM_OPERATOR_ID,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "预测管线联动建警失败（降级跳过） | employee_id=%s | err=%s", employee_id, e
+                )
 
         return result_dict
 

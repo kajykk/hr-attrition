@@ -22,6 +22,7 @@ celery_app = Celery(
         "app.tasks.model_governance",
         "app.tasks.data_retention",
         "app.tasks.kb_indexing",
+        "app.tasks.warning_escalation",
     ],
 )
 
@@ -59,6 +60,11 @@ celery_app.conf.update(
         "data-retention-report-monthly": {
             "task": "app.tasks.data_retention.report_retention_status",
             "schedule": crontab(hour=5, minute=0, day_of_month=1),
+        },
+        # 预警自动升级：每 6h（FR-WARN-004，超 24h 升一级封顶 P0 / 48h 升级至 HR 经理）
+        "warning-escalate-stale": {
+            "task": "app.tasks.warning_escalation.escalate_stale_warnings",
+            "schedule": crontab(hour="*/6", minute=0),
         },
     },
 )

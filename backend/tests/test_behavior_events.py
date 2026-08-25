@@ -11,7 +11,7 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pandas as pd
 import pytest
@@ -420,3 +420,150 @@ def test_migration_file_registered_in_models_package():
 
     assert hasattr(models_pkg, "BehaviorEvent")
     assert "BehaviorEvent" in models_pkg.__all__
+
+
+# ============================================================
+# 4. 行为事件扩容（feat/rag-kb）：预测查看 / 报表导出接线
+# ============================================================
+
+
+def _risk_api_env(role="hr_manager"):
+    """构造 risk 路由测试环境：JWT + dependency_overrides + mock db（仓库既有惯例）."""
+    from types import SimpleNamespace
+
+    from app.api import deps
+    from app.core.security import create_access_token
+    from app.db.session import get_db
+    from app.main import app
+
+    tenant_id = uuid4()
+    user = SimpleNamespace(id=uuid4(), tenant_id=tenant_id, role=role,
+                           status="active", email=f"{role}@corp.com")
+    token = create_access_token(str(user.id), str(tenant_id), role)
+
+    row = SimpleNamespace(
+        id=uuid4(), employee_id=uuid4(), model_version="fusion-engine-v1",
+        risk_score=72, risk_level="medium_high", predicted_at=datetime.now(UTC),
+    )
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [row]
+
+    calls: list = []
+
+    async def _capture(stmt):
+        calls.append(stmt)
+        return result
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute = AsyncMock(side_effect=_capture)
+
+    async def _fake_user():
+        return user
+
+    async def _fake_db():
+        yield db
+
+    app.dependency_overrides[deps.get_current_user] = _fake_user
+    app.dependency_overrides[get_db] = _fake_db
+    return {"app": app, "token": token, "user": user,
+            "tenant": tenant_id, "db": db, "calls": calls}
+
+
+def test_new_event_type_constants_registered():
+    """新增事件类型常量应存在且取值符合 README 事件类型清单."""
+    assert behavior_service.EVENT_RISK_PREDICTION_VIEWED == "risk_prediction_viewed"
+    assert behavior_service.EVENT_REPORT_EXPORTED == "report_exported"
+
+
+@pytest.mark.asyncio
+async def test_risk_prediction_view_endpoint_records_viewed_event(client, monkeypatch):
+    """GET /risk/employees/{id}：预测查看应记 risk_prediction_viewed 行为事件."""
+    from app.services.risk_service import RiskService
+
+    env = _risk_api_env()
+
+    async def _fake_predict(employee_id, tenant_id, force_refresh=False, db=None):
+        return {
+            "prediction_id": str(uuid4()), "employee_id": str(employee_id),
+            "risk_score": 72, "risk_level": "medium_high",
+            "modality_scores": {"structured": 0.7, "behavior": 0.5},
+            "model_version": "fusion-engine-v1",
+            "predicted_at": datetime.now(UTC).isoformat(),
+            "cached": False, "shap_factors": [], "behavior_data_source": "demo",
+        }
+
+    monkeypatch.setattr(RiskService, "predict", staticmethod(_fake_predict))
+    record_spy = AsyncMock(return_value=None)
+    monkeypatch.setattr("app.api.v1.risk.record_behavior_event", record_spy)
+
+    try:
+        resp = client.get(
+            f"/api/v1/risk/employees/{uuid4()}",
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert resp.status_code == 200
+        record_spy.assert_awaited_once()
+        kwargs = record_spy.await_args.kwargs
+        assert kwargs["event_type"] == "risk_prediction_viewed"
+        # get_current_tenant_id 返回 str（JWT 注入的 ContextVar）
+        assert UUID(str(kwargs["tenant_id"])) == env["tenant"]
+        assert kwargs["payload"]["risk_score"] == 72
+    finally:
+        env["app"].dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_report_export_endpoint_records_exported_event(client, monkeypatch):
+    """POST /risk/reports/export：导出成功应记 report_exported 事件并返回 CSV."""
+    env = _risk_api_env(role="admin")
+    employee_id = uuid4()
+
+    async def _fake_resolve(session, tid, email):
+        from uuid import UUID as _UUID
+
+        assert _UUID(str(tid)) == env["tenant"]
+        return employee_id
+
+    monkeypatch.setattr("app.api.v1.risk.resolve_employee_id_by_email", _fake_resolve)
+    record_spy = AsyncMock(return_value=None)
+    monkeypatch.setattr("app.api.v1.risk.record_behavior_event", record_spy)
+
+    try:
+        resp = client.post(
+            "/api/v1/risk/reports/export?window_days=30",
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert resp.status_code == 200
+        assert "text/csv" in resp.headers["content-type"]
+        assert "prediction_id" in resp.text  # CSV 表头存在
+        record_spy.assert_awaited_once()
+        kwargs = record_spy.await_args.kwargs
+        assert kwargs["event_type"] == "report_exported"
+        assert kwargs["employee_id"] == employee_id
+        assert kwargs["payload"]["window_days"] == 30
+    finally:
+        env["app"].dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_report_export_skips_event_without_employee_match(client, monkeypatch):
+    """登录账号无匹配员工（HR 管理账号）→ 导出照常返回，但不写行为事件."""
+    env = _risk_api_env(role="hr_manager")
+
+    async def _fake_resolve(session, tid, email):
+        return None
+
+    monkeypatch.setattr("app.api.v1.risk.resolve_employee_id_by_email", _fake_resolve)
+    record_spy = AsyncMock(return_value=None)
+    monkeypatch.setattr("app.api.v1.risk.record_behavior_event", record_spy)
+
+    try:
+        resp = client.post(
+            "/api/v1/risk/reports/export",
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert resp.status_code == 200
+        record_spy.assert_not_awaited()  # 未匹配员工 → 跳过事件（不污染行为特征）
+    finally:
+        env["app"].dependency_overrides.clear()

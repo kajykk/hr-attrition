@@ -3,10 +3,11 @@
 职责：
   1. record_behavior_event：单条行为事件写入（异步、best-effort，失败不阻断业务）
   2. record_behavior_events：批量写入（add_all 单事务，批量容忍：失败整体回滚并告警）
-  3. 真实事件源接线：
-     a) 登录成功（auth.py）→ record_login_event_for_user 记 login 事件
-        （User 与 Employee 无外键，best-effort 按租户内 email 匹配员工，未匹配则跳过）
-     b) 预警状态流转（warnings.py）→ record_warning_transition_event 记 warning_transition 事件
+   3. 真实事件源接线：
+      a) 登录成功（auth.py）→ record_login_event_for_user 记 login 事件
+         （User 与 Employee 无外键，best-effort 按租户内 email 匹配员工，未匹配则跳过）
+      b) 预警状态流转（warnings.py）→ record_warning_transition_event 记 warning_transition 事件
+      c) 风险预测查看 / 报表导出（risk.py）→ risk_prediction_viewed / report_exported 事件
 
 内置事件类型常量与 feature_provider 行为特征聚合的映射约定保持一致。
 """
@@ -28,6 +29,9 @@ EVENT_EMAIL = "email"
 EVENT_MEETING = "meeting"
 EVENT_MEETING_DECLINE = "meeting_decline"
 EVENT_WARNING_TRANSITION = "warning_transition"
+# 行为事件扩容（feat/rag-kb）：预测查看 / 报表导出（HR 侧操作信号）
+EVENT_RISK_PREDICTION_VIEWED = "risk_prediction_viewed"
+EVENT_REPORT_EXPORTED = "report_exported"
 
 
 async def record_behavior_event(
