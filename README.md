@@ -1,4 +1,4 @@
-# HRA · 企业员工离职风险预警系统（HR Attrition Risk Analysis）
+﻿# HRA · 企业员工离职风险预警系统（HR Attrition Risk Analysis）
 
 > 面向企业 HR 的**员工离职风险智能预警平台**：多模态融合（结构化 + 行为时序）预测员工离职概率，从预测 → 解释（SHAP）→ 分级预警 → AI 留存建议形成完整闭环，内置模型治理（漂移 / 公平性 / 回滚）与隐私合规（PII 加密 / PIPL）。
 
@@ -160,7 +160,7 @@ monitoring/ Prometheus / Promtail 配置
 docker-compose.yml  一键编排 11 服务
 ```
 
-## RAG 制度知识库问答（feat/rag-kb）
+## RAG 制度知识库问答
 
 面向 HR 场景的企业制度知识库智能问答：文档上传 → 解析切分 → 向量化入库 → 混合检索 → 流式生成，答案附**引用溯源**，无依据自动**拒答**。
 
