@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // AI 保留建议视图 - SSE 流式接收 + 打字动画
-import { ref, onMounted, nextTick, useTemplateRef } from 'vue'
-import { apiClient, extractApiError } from '@/api/client'
-import { getAccessToken } from '@/api/auth-keys'
+import { ref, onMounted, onUnmounted, nextTick, useTemplateRef } from 'vue'
+import { apiClient, buildAuthHeaders, extractApiError } from '@/api/client'
+import { consumeSSE } from '@/api/sse'
 import type { WarningOut, Paginated, AdviseMetadata } from '@/api/types'
 
 // 演示数据仅限开发环境；生产环境失败展示真实错误
@@ -16,6 +16,9 @@ const adviceText = ref('')
 const metadata = ref<AdviseMetadata | null>(null)
 const errorMsg = ref('')
 const demoMode = ref(false)
+
+// SSE 流中止通道（用户停止 / 组件卸载时取消进行中的请求）
+let abortController: AbortController | null = null
 
 // 预警下拉选项
 const warningOptions = ref<Array<{ id: string; label: string }>>([])
@@ -61,7 +64,10 @@ async function generate() {
   adviceText.value = ''
   metadata.value = null
 
-  const token = getAccessToken()
+  // 中止通道：用户停止 / 组件卸载时取消进行中的 SSE 流
+  abortController?.abort()
+  abortController = new AbortController()
+  const controller = abortController
 
   // 构造 query
   const qs = new URLSearchParams()
@@ -70,43 +76,25 @@ async function generate() {
 
   try {
     // 用 fetch + ReadableStream 解析 SSE（不用 EventSource，因为要 POST）
-    // 租户上下文由后端从 JWT 解析（客户端不再自报 X-Tenant-Id）
+    // 解析统一走 api/sse.ts；租户上下文由后端从 JWT 解析（客户端不再自报 X-Tenant-Id）
     const resp = await fetch(`/api/v1/advise/stream?${qs.toString()}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: buildAuthHeaders(),
+      signal: controller.signal,
     })
     if (!resp.ok || !resp.body) {
       throw new Error(`SSE 请求失败（${resp.status}）`)
     }
 
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done: readerDone, value } = await reader.read()
-      if (readerDone) break
-      buffer += decoder.decode(value, { stream: true })
-      // SSE 事件以双换行分隔
-      const events = buffer.split('\n\n')
-      buffer = events.pop() || ''
-      for (const evt of events) {
-        // 提取 data: 行
-        const dataLines = evt
-          .split('\n')
-          .filter((l) => l.startsWith('data:'))
-          .map((l) => l.replace(/^data:\s*/, ''))
-        const dataStr = dataLines.join('\n').trim()
-        if (!dataStr) continue
-        if (dataStr === '[DONE]') {
+    await consumeSSE(
+      resp,
+      ({ data }) => {
+        if (data === '[DONE]') {
           done.value = true
-          continue
+          return
         }
         try {
-          const obj = JSON.parse(dataStr) as { chunk?: string; metadata?: AdviseMetadata }
+          const obj = JSON.parse(data) as { chunk?: string; metadata?: AdviseMetadata }
           if (obj.chunk) {
             adviceText.value += obj.chunk
             scrollToBottom()
@@ -116,14 +104,20 @@ async function generate() {
           }
         } catch {
           // 非 JSON 文本，直接当 chunk
-          adviceText.value += dataStr
+          adviceText.value += data
           scrollToBottom()
         }
-      }
-    }
+      },
+      controller.signal,
+    )
     // 流结束但未收到 [DONE] 也标记完成
     done.value = true
   } catch (e: unknown) {
+    // 用户主动停止/离开页面：静默收尾，不触发错误与演示回退
+    if ((e as Error)?.name === 'AbortError' || !streaming.value) {
+      done.value = true
+      return
+    }
     errorMsg.value = extractApiError(e, '生成失败')
     // 演示模式仅限开发环境
     if (allowDemo) {
@@ -134,6 +128,12 @@ async function generate() {
   } finally {
     streaming.value = false
   }
+}
+
+function stopGeneration() {
+  abortController?.abort()
+  // 同时中断演示模式的打字循环（其以 streaming=false 为退出条件）
+  streaming.value = false
 }
 
 // 演示模式：模拟 SSE 流式输出
@@ -185,6 +185,7 @@ function clearOutput() {
 }
 
 onMounted(loadWarningOptions)
+onUnmounted(stopGeneration)
 </script>
 
 <template>
@@ -242,6 +243,13 @@ onMounted(loadWarningOptions)
             @click="generate"
           >
             {{ streaming ? '生成中...' : '生成建议' }}
+          </button>
+          <button
+            v-if="streaming"
+            class="secondary"
+            @click="stopGeneration"
+          >
+            停止
           </button>
           <button
             class="secondary"

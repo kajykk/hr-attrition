@@ -6,6 +6,10 @@
 
 未启用 RAG（开关关闭/依赖缺失/非 PostgreSQL）时全部返回 503。
 """
+import hashlib
+import json
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -168,9 +172,6 @@ async def kb_query_stream(body: KbQueryRequest, user: User = Depends(get_current
 # ---------------------------------------------------------------- 内部工具
 async def _audit_kb(tenant_id: str, user_id: str, question: str, refused: bool) -> None:
     """审计知识库查询：走 audit_service 哈希链；问题明文不入日志，仅记 SHA256."""
-    import hashlib
-    from uuid import UUID
-
     try:
         from app.db.session import async_session_factory
         from app.services.audit_service import append_audit_log
@@ -191,6 +192,4 @@ async def _audit_kb(tenant_id: str, user_id: str, question: str, refused: bool) 
 
 
 def _json_dumps(payload: dict) -> str:
-    import json
-
     return json.dumps(payload, ensure_ascii=False)

@@ -48,14 +48,20 @@ def _mask_id_card(id_card: str) -> str:
     return id_card[:3] + "*" * (len(id_card) - 7) + id_card[-4:]
 
 
-def _latest_prediction_subquery():
-    """每个员工最新一条预测（DISTINCT ON employee_id，按 predicted_at 降序）."""
+def _latest_prediction_subquery(tenant_id):
+    """每个员工最新一条预测（DISTINCT ON employee_id，按 predicted_at 降序）.
+
+    tenant_id 在子查询内过滤（而非仅靠外层 join 过滤），让 PG 能用
+    (tenant_id, ...) 索引先收窄预测集再去做 DISTINCT ON，避免多租户大表
+    全量扫描。
+    """
     return (
         select(
             RiskPrediction.employee_id,
             RiskPrediction.risk_score,
             RiskPrediction.risk_level,
         )
+        .where(RiskPrediction.tenant_id == tenant_id)
         .distinct(RiskPrediction.employee_id)
         .order_by(RiskPrediction.employee_id, RiskPrediction.predicted_at.desc())
         .subquery()
@@ -79,7 +85,7 @@ async def list_employees(
     """
     tenant_id = get_current_tenant_id()
 
-    latest = _latest_prediction_subquery()
+    latest = _latest_prediction_subquery(tenant_id)
 
     stmt = select(
         Employee, Department.name.label("dept_name"),
@@ -104,21 +110,8 @@ async def list_employees(
                 | (Employee.name_hash == pii_hash(kw))
             )
 
-    # 总数（与过滤条件一致）
-    count_stmt = select(func.count()).select_from(Employee).where(
-        Employee.tenant_id == tenant_id,
-        Employee.deleted_at.is_(None),
-    )
-    if department_id:
-        count_stmt = count_stmt.where(Employee.department_id == department_id)
-    if status_filter:
-        count_stmt = count_stmt.where(Employee.status == status_filter)
-    if keyword and keyword.strip():
-        kw = keyword.strip()
-        count_stmt = count_stmt.where(
-            (Employee.employee_no.ilike(f"{kw}%"))
-            | (Employee.name_hash == pii_hash(kw))
-        )
+    # 总数（与列表查询共用同一过滤条件，避免双份条件漂移）
+    count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
     total = (await db.execute(count_stmt)).scalar_one()
 
     # 分页
@@ -143,6 +136,53 @@ async def list_employees(
         )
 
     return PaginatedEmployees(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.get("/stats/risk-distribution")
+async def risk_distribution_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """本租户员工风险分布统计（仪表盘 KPI，全量口径）.
+
+    基于每员工最新一次预测（与列表页同源 DISTINCT ON 子查询）聚合各等级人数，
+    覆盖全部未删除员工——前端仪表盘以此替代"第一页 100 条"近似统计，
+    员工总数超过分页上限时分布不再失真。无任何预测记录的员工计入 unscored。
+    """
+    tenant_id = get_current_tenant_id()
+    latest = _latest_prediction_subquery(tenant_id)
+    level_expr = func.coalesce(latest.c.risk_level, "unscored").label("risk_level")
+    stmt = (
+        select(level_expr, func.count())
+        .select_from(Employee)
+        .outerjoin(latest, Employee.id == latest.c.employee_id)
+        .where(
+            Employee.tenant_id == tenant_id,
+            Employee.deleted_at.is_(None),
+        )
+        .group_by(level_expr)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    distribution: dict[str, int] = {
+        "low": 0,
+        "medium_low": 0,
+        "medium": 0,
+        "medium_high": 0,
+        "high": 0,
+        "unscored": 0,
+    }
+    total = 0
+    for level, cnt in rows:
+        key = str(level) if str(level) in distribution else "unscored"
+        distribution[key] += int(cnt)
+        total += int(cnt)
+
+    return {
+        "total_employees": total,
+        "high_risk_count": distribution["medium_high"] + distribution["high"],
+        "distribution": distribution,
+    }
 
 
 @router.get("/{employee_id}", response_model=EmployeeDetail)

@@ -584,10 +584,107 @@ def test_login_invalid_totp_writes_audit_log(client, monkeypatch):
         app.dependency_overrides.clear()
 
 
-def test_refresh_with_missing_field_returns_422(client):
-    """refresh 端点缺少 refresh_token 字段应返回 422."""
+def test_refresh_without_body_or_cookie_returns_401(client):
+    """refresh 端点请求体与 cookie 均无凭据 → 401（HttpOnly Cookie 改造后契约）."""
     resp = client.post(
         "/api/v1/auth/refresh",
         json={},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 401
+    assert "refresh_token" in resp.json()["detail"]
+
+
+# ============================================================
+# 9. 风险分布统计端点（仪表盘 KPI，全量口径）
+# ============================================================
+
+
+def test_risk_distribution_requires_auth(client):
+    """GET /api/v1/employees/stats/risk-distribution 无 token 应返回 401."""
+    resp = client.get("/api/v1/employees/stats/risk-distribution")
+    assert resp.status_code == 401
+
+
+def _override_auth_and_db(app, db_mock):
+    """覆盖 get_current_user 与 get_db（统计端点测试公共装配）."""
+    from app.api import deps
+    from app.db.session import get_db
+    from app.models.user import User
+
+    fake_user = MagicMock(spec=User)
+    fake_user.id = uuid4()
+    fake_user.tenant_id = uuid4()
+    fake_user.role = "hr_manager"
+    fake_user.status = "active"
+
+    async def _fake_get_current_user():
+        return fake_user
+
+    async def _fake_get_db():
+        yield db_mock
+
+    app.dependency_overrides[deps.get_current_user] = _fake_get_current_user
+    app.dependency_overrides[get_db] = _fake_get_db
+    return create_access_token(str(fake_user.id), str(fake_user.tenant_id), "hr_manager")
+
+
+def test_risk_distribution_aggregates_levels(client):
+    """聚合各等级人数：high_risk_count = medium_high + high，未知等级归入 unscored."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.main import app
+
+    result_mock = MagicMock()
+    # (level, count) 聚合行；含一个未知等级值验证兜底归类
+    result_mock.all.return_value = [
+        ("low", 5),
+        ("medium", 3),
+        ("medium_high", 7),
+        ("high", 2),
+        ("weird_level", 1),
+    ]
+    db_mock = AsyncMock()
+    db_mock.execute = AsyncMock(return_value=result_mock)
+
+    token = _override_auth_and_db(app, db_mock)
+    try:
+        resp = client.get(
+            "/api/v1/employees/stats/risk-distribution",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_employees"] == 18
+        assert body["high_risk_count"] == 9  # medium_high(7) + high(2)
+        dist = body["distribution"]
+        assert dist["low"] == 5 and dist["medium"] == 3
+        assert dist["medium_high"] == 7 and dist["high"] == 2
+        assert dist["unscored"] == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_risk_distribution_empty_returns_zeros(client):
+    """无员工时返回全 0 分布（total_employees=0）."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.main import app
+
+    result_mock = MagicMock()
+    result_mock.all.return_value = []
+    db_mock = AsyncMock()
+    db_mock.execute = AsyncMock(return_value=result_mock)
+
+    token = _override_auth_and_db(app, db_mock)
+    try:
+        resp = client.get(
+            "/api/v1/employees/stats/risk-distribution",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_employees"] == 0
+        assert body["high_risk_count"] == 0
+        assert set(body["distribution"].values()) == {0}
+    finally:
+        app.dependency_overrides.clear()

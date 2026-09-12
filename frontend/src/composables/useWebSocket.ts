@@ -37,6 +37,8 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let manualClose = false
+  // 未应答心跳计数：连续 2 个 ping 无 pong → 判定半打开连接，主动断开重连
+  let unansweredPings = 0
 
   // 事件监听器表（按 type 分组）
   const listeners = new Map<string, Set<Listener>>()
@@ -72,6 +74,7 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
       connected.value = true
       retryIndex = 0
       reconnectAttempts.value = 0
+      unansweredPings = 0
       options.onStatusChange?.(true)
       startHeartbeat()
     }
@@ -85,7 +88,10 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
         return
       }
       const obj = parsed as { type?: string } | null
-      if (obj?.type === 'pong') return
+      if (obj?.type === 'pong') {
+        unansweredPings = 0
+        return
+      }
       // 全局回调
       options.onMessage?.(parsed)
       // 按 type 分发
@@ -106,8 +112,14 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
   function startHeartbeat() {
     heartbeatTimer = setInterval(() => {
       if (ws?.readyState === WebSocket.OPEN) {
+        if (unansweredPings >= 2) {
+          // 半打开连接（如休眠恢复/网络切换）：主动断开走重连，避免假活
+          ws.close()
+          return
+        }
         // 后端约定裸文本 "ping"（ws.py 按 data === 'ping' 判定），JSON 会被当作未知消息忽略
         ws.send('ping')
+        unansweredPings += 1
       }
     }, 30000)
   }
@@ -124,6 +136,8 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
       console.warn('[useWebSocket] reached max reconnect attempts')
       return
     }
+    // 清理旧定时器：防止极端时序下叠加重连任务
+    if (reconnectTimer) clearTimeout(reconnectTimer)
     const delay = BACKOFFS[retryIndex++]
     reconnectAttempts.value = retryIndex
     reconnectTimer = setTimeout(connect, delay)

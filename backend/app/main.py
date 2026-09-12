@@ -24,6 +24,9 @@ from app.core.tenant import tenant_middleware
 setup_logging()
 logger = get_logger(__name__)
 
+# 应用版本（FastAPI 文档 /health / / 三处共用，避免多处硬编码漂移）
+APP_VERSION = "1.0.0"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,7 +60,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="HRA - 企业员工离职风险与人才流失预警系统",
     description="FastAPI + SQLAlchemy async + Celery + 通义千问 Max",
-    version="1.0.0",
+    version=APP_VERSION,
     lifespan=lifespan,
     openapi_url="/openapi.json",
     docs_url="/docs",
@@ -154,7 +157,7 @@ async def health() -> dict:
     status = "healthy" if all(v == "healthy" for v in components.values() if v != "not_configured") else "degraded"
     return {
         "status": status,
-        "version": "1.0.0",
+        "version": APP_VERSION,
         "env": settings.APP_ENV,
         "components": components,
     }
@@ -163,4 +166,4 @@ async def health() -> dict:
 @app.get("/", tags=["root"])
 async def root() -> dict:
     """根路径."""
-    return {"app": "HRA", "version": "1.0.0", "docs": "/docs"}
+    return {"app": "HRA", "version": APP_VERSION, "docs": "/docs"}

@@ -8,7 +8,7 @@ from typing import Any
 # ===== 密码哈希（bcrypt + salt） =====
 # passlib 与 bcrypt 5.x 不兼容，直接使用 bcrypt 库
 import bcrypt as _bcrypt
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken
 from jose import jwt
 
 from app.core.config import settings
@@ -74,35 +74,30 @@ def decode_token(token: str) -> dict:
 
 
 # ===== PII Fernet 字段级加密（ADR-007） =====
-# 复用 DWS pii_crypto.py 思路：Fernet 对称加密，密钥季度轮换
-_fernet: Fernet | None = None
-
-
-def _get_fernet() -> Fernet:
-    """懒加载 Fernet 实例（密钥来自 PII_FERNET_KEY 环境变量）."""
-    global _fernet
-    if _fernet is None:
-        key = settings.PII_FERNET_KEY.encode() if isinstance(settings.PII_FERNET_KEY, str) else settings.PII_FERNET_KEY
-        _fernet = Fernet(key)
-    return _fernet
+# 统一委托给 pii_crypto（多钥轮换的单一实现），本模块仅保留历史公开契约：
+#   - encrypt_pii/decrypt_pii 接受 None 并对解密失败返回 None（不抛异常）。
+# 避免两套 Fernet 实例缓存/密钥解析逻辑并存导致行为漂移。
+# 注意：pii_crypto 反向依赖本模块的 pii_hash，故此处延迟导入防循环。
 
 
 def encrypt_pii(plaintext: str | None) -> str | None:
     """PII 字段加密：返回 Fernet token 字符串。None 输入返回 None."""
     if plaintext is None:
         return None
-    f = _get_fernet()
-    return f.encrypt(plaintext.encode("utf-8")).decode("utf-8")
+    from app.core.pii_crypto import encrypt
+
+    return encrypt(plaintext)
 
 
 def decrypt_pii(ciphertext: str | None) -> str | None:
     """PII 字段解密。None 输入返回 None；非法 token 返回 None."""
     if ciphertext is None:
         return None
-    f = _get_fernet()
+    from app.core.pii_crypto import decrypt
+
     try:
-        return f.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
-    except (InvalidToken, ValueError):
+        return decrypt(ciphertext)
+    except InvalidToken:
         return None
 
 

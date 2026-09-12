@@ -25,10 +25,13 @@ from __future__ import annotations
 
 import pickle
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
+from sqlalchemy import func, select
 
+from app.core.logging import get_logger
 from app.core.timeutil import today
 from app.ml.feature_engineering import (
     BEHAVIOR_SERIES,
@@ -37,6 +40,8 @@ from app.ml.feature_engineering import (
     N_MONTHS,
     STRUCTURED_FEATURE_COLUMNS,
 )
+
+logger = get_logger(__name__)
 
 # DB 百分位（0-100）→ 模型输入分位（0-1）的换算系数（显式契约，训练侧同理）
 SALARY_PERCENTILE_SCALE = 0.01
@@ -432,10 +437,6 @@ async def build_behavior_features_from_events(db, tenant_id, employee) -> tuple[
     Returns:
         (behavior_df, source) — source ∈ {"real", "demo"}。
     """
-    from datetime import UTC, datetime, timedelta
-
-    from sqlalchemy import func, select
-
     from app.models.behavior_event import BehaviorEvent
 
     try:
@@ -457,11 +458,7 @@ async def build_behavior_features_from_events(db, tenant_id, employee) -> tuple[
         rows = (await db.execute(stmt)).all()
     except Exception as e:  # noqa: BLE001
         # 查询失败（如表尚未迁移/DB 故障）→ 回退 demo，不阻断预测主流程
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "behavior_events 聚合查询失败，回退 demo 行为特征 | err=%s", e
-        )
+        logger.warning("behavior_events 聚合查询失败，回退 demo 行为特征 | err=%s", e)
         return build_behavior_features(employee), BEHAVIOR_DATA_SOURCE_DEMO
 
     # 展开为 天索引 → {event_type: count}（day 为 date_trunc 结果，取日期序号）

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // RAG 知识库视图 - 文档管理（上传/进度/删除）+ 制度问答（SSE 流式 + 引用溯源）
-import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -63,18 +63,24 @@ async function onFileChosen(event: Event) {
 }
 
 // processing 状态轮询（当前为轮询通道；WS 推送为后续增强）
+// 容忍偶发网络抖动：连续失败超过 POLL_MAX_FAILURES 才停止
+const POLL_MAX_FAILURES = 2
+
 function startPolling(documentId: string) {
   stopPolling()
+  let failures = 0
   pollTimer = setInterval(async () => {
     try {
       const doc = await getDocumentStatus(documentId)
+      failures = 0
       const idx = documents.value.findIndex((d) => d.id === documentId)
       if (idx >= 0) documents.value[idx] = doc
       if (doc.status !== 'processing') stopPolling()
       if (doc.status === 'ready') ElMessage.success(`《${doc.title}》索引完成`)
       if (doc.status === 'failed') ElMessage.error(`《${doc.title}》解析失败：${doc.error_message ?? ''}`)
     } catch {
-      stopPolling()
+      failures += 1
+      if (failures > POLL_MAX_FAILURES) stopPolling()
     }
   }, 2000)
 }
@@ -131,7 +137,6 @@ function scrollBottom() {
 }
 
 async function nextTickSafe() {
-  const { nextTick } = await import('vue')
   await nextTick()
   const el = chatRef.value
   if (el) el.scrollTop = el.scrollHeight
@@ -146,18 +151,21 @@ async function ask() {
 
   const reply: ChatTurn = { role: 'assistant', text: '' }
   turns.value.push(reply)
+  // 关键：从数组取回的是 Vue 响应式代理；直接改原始对象 reply 不会触发更新，
+  // 流式 token 将无法实时渲染（打字机效果失效）。
+  const replyView = turns.value[turns.value.length - 1]
   answering.value = true
   try {
     const result = await streamKnowledgeBase(q, (token) => {
-      reply.text += token
+      replyView.text += token
       scrollBottom()
     })
-    reply.text = result.answer || reply.text
-    reply.citations = result.citations
-    reply.refused = result.refused
-    reply.latencyMs = result.latency_ms
+    replyView.text = result.answer || replyView.text
+    replyView.citations = result.citations
+    replyView.refused = result.refused
+    replyView.latencyMs = result.latency_ms
   } catch (e) {
-    reply.text = e instanceof Error ? e.message : '生成失败，请重试'
+    replyView.text = e instanceof Error ? e.message : '生成失败，请重试'
   } finally {
     answering.value = false
     scrollBottom()
@@ -177,7 +185,12 @@ onBeforeUnmount(stopPolling)
       <header class="panel-head">
         <h2>制度文档库</h2>
         <template v-if="canManage">
-          <el-button type="primary" size="small" :loading="uploading" @click="pickFile">
+          <el-button
+            type="primary"
+            size="small"
+            :loading="uploading"
+            @click="pickFile"
+          >
             上传文档
           </el-button>
           <input
@@ -186,10 +199,15 @@ onBeforeUnmount(stopPolling)
             accept=".pdf,.docx,.md,.txt"
             class="hidden-input"
             @change="onFileChosen"
-          />
+          >
         </template>
       </header>
-      <p v-if="!canManage" class="hint">仅管理员 / HR 经理可管理制度文档</p>
+      <p
+        v-if="!canManage"
+        class="hint"
+      >
+        仅管理员 / HR 经理可管理制度文档
+      </p>
       <el-table
         v-if="canManage"
         v-loading="loadingDocs"
@@ -197,25 +215,45 @@ onBeforeUnmount(stopPolling)
         size="small"
         height="100%"
       >
-        <el-table-column prop="title" label="标题" min-width="140" show-overflow-tooltip />
-        <el-table-column label="状态" width="80">
+        <el-table-column
+          prop="title"
+          label="标题"
+          min-width="140"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          label="状态"
+          width="80"
+        >
           <template #default="scope">
-            <el-tag v-if="scope?.row" :type="statusType[scope.row.status]" size="small">
+            <el-tag
+              v-if="scope?.row"
+              :type="statusType[scope.row.status]"
+              size="small"
+            >
               {{ statusLabel[scope.row.status] ?? scope.row.status }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="chunk_count" label="切片" width="60" />
-        <el-table-column label="" width="50">
+        <el-table-column
+          prop="chunk_count"
+          label="切片"
+          width="60"
+        />
+        <el-table-column
+          label=""
+          width="50"
+        >
           <template #default="scope">
             <el-button
               v-if="scope?.row"
               link
               type="danger"
               size="small"
-              @click="removeDoc(scope.row)"
-              >删</el-button
+              @click="removeDoc(scope.row as KbDocument)"
             >
+              删
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -227,8 +265,14 @@ onBeforeUnmount(stopPolling)
         <h2>制度智能问答</h2>
         <span class="hint">答案附引用溯源 · 无依据自动拒答</span>
       </header>
-      <div ref="chatRef" class="chat-body">
-        <p v-if="turns.length === 0" class="empty-hint">
+      <div
+        ref="chatRef"
+        class="chat-body"
+      >
+        <p
+          v-if="turns.length === 0"
+          class="empty-hint"
+        >
           例如：年假可以跨年结转吗？/ 试用期离职需要提前几天？
         </p>
         <div
@@ -237,14 +281,32 @@ onBeforeUnmount(stopPolling)
           class="bubble"
           :class="turn.role"
         >
-          <div class="bubble-text">{{ turn.text }}<span v-if="answering && turn.role === 'assistant' && i === turns.length - 1" class="cursor">▌</span></div>
-          <div v-if="turn.citations?.length" class="citations">
+          <div class="bubble-text">
+            {{ turn.text }}<span
+              v-if="answering && turn.role === 'assistant' && i === turns.length - 1"
+              class="cursor"
+            >▌</span>
+          </div>
+          <div
+            v-if="turn.citations?.length"
+            class="citations"
+          >
             <span class="cite-title">引用来源：</span>
-            <span v-for="c in turn.citations" :key="c.index" class="cite-item" :title="c.snippet">
+            <span
+              v-for="c in turn.citations"
+              :key="c.index"
+              class="cite-item"
+              :title="c.snippet"
+            >
               [{{ c.index }}] {{ c.title }}{{ c.heading_path ? ` · ${c.heading_path}` : '' }}
             </span>
           </div>
-          <div v-if="turn.latencyMs" class="meta">{{ turn.latencyMs }}ms</div>
+          <div
+            v-if="turn.latencyMs"
+            class="meta"
+          >
+            {{ turn.latencyMs }}ms
+          </div>
         </div>
       </div>
       <footer class="chat-foot">
@@ -255,7 +317,13 @@ onBeforeUnmount(stopPolling)
           :disabled="answering"
           @keyup.enter="ask"
         />
-        <el-button type="primary" :loading="answering" @click="ask">提问</el-button>
+        <el-button
+          type="primary"
+          :loading="answering"
+          @click="ask"
+        >
+          提问
+        </el-button>
       </footer>
     </section>
   </div>

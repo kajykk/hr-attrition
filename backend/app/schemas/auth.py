@@ -28,7 +28,13 @@ class TokenResponse(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    """刷新请求.
+
+    refresh_token：请求体格式（旧客户端）。启用 HttpOnly Cookie 后可省略，
+    服务端优先从 cookie 读取。
+    """
+
+    refresh_token: str | None = None
 
 
 class RefreshResponse(BaseModel):
@@ -54,9 +60,13 @@ class UserOut(BaseModel):
 
 
 class LoginResult(BaseModel):
-    """登录返回体（D05 3.1）."""
+    """登录返回体（D05 3.1）.
+
+    refresh_token：启用 HttpOnly Cookie 时为 None（凭据经 Set-Cookie 下发，
+    不落入 JS 可读存储）；关闭开关时回退请求体下发（旧客户端兼容）。
+    """
 
     access_token: str
-    refresh_token: str
+    refresh_token: str | None = None
     expires_in: int
     user: UserOut

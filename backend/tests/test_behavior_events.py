@@ -8,6 +8,7 @@
   - 预警流转事件接线：payload 含 from/to 状态
   - feature_provider 行为模态真实路径（real）与回退路径（demo）双分支
 """
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -567,3 +568,226 @@ async def test_report_export_skips_event_without_employee_match(client, monkeypa
         record_spy.assert_not_awaited()  # 未匹配员工 → 跳过事件（不污染行为特征）
     finally:
         env["app"].dependency_overrides.clear()
+
+
+# ============================================================
+# 5. 前端埋点管道（behavior 路由）：ui_ 事件批量上报
+# ============================================================
+
+
+def _behavior_api_env(role="hr_manager"):
+    """构造 behavior 路由测试环境（沿用 _risk_api_env 惯例）."""
+    from types import SimpleNamespace
+
+    from app.api import deps
+    from app.core.security import create_access_token
+    from app.db.session import get_db
+    from app.main import app
+
+    tenant_id = uuid4()
+    user = SimpleNamespace(id=uuid4(), tenant_id=tenant_id, role=role,
+                           status="active", email=f"{role}@corp.com")
+    token = create_access_token(str(user.id), str(tenant_id), role)
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.add_all = MagicMock()
+    db.flush = AsyncMock()
+
+    async def _fake_user():
+        return user
+
+    async def _fake_db():
+        yield db
+
+    app.dependency_overrides[deps.get_current_user] = _fake_user
+    app.dependency_overrides[get_db] = _fake_db
+    return {"app": app, "token": token, "user": user,
+            "tenant": tenant_id, "db": db}
+
+
+def test_ui_event_type_constants_registered():
+    """前端埋点事件类型常量应存在（ui_ 前缀区分于后端内置事件）."""
+    from app.schemas import behavior as behavior_schema
+
+    assert behavior_schema.EVENT_UI_PAGE_VIEW == "ui_page_view"
+    assert behavior_schema.EVENT_UI_FEATURE_USE == "ui_feature_use"
+    assert behavior_schema.EVENT_UI_REPORT_VIEW == "ui_report_view"
+
+
+@pytest.mark.asyncio
+async def test_behavior_endpoint_records_events_with_explicit_employee(client, monkeypatch):
+    """显式 employee_id 的事件应直接写入 behavior_events."""
+    import app.api.v1.behavior as behavior_api
+
+    env = _behavior_api_env()
+    employee_id = uuid4()
+    record_spy = AsyncMock(return_value=1)
+    monkeypatch.setattr("app.api.v1.behavior.record_behavior_events", record_spy)
+
+    try:
+        resp = client.post(
+            "/api/v1/behavior/events",
+            json={"events": [{"event_type": "ui_page_view", "employee_id": str(employee_id),
+                              "payload": {"route": "/risk", "duration_ms": 12000}}]},
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["received"] == 1
+        assert data["accepted"] == 1
+        record_spy.assert_awaited_once()
+        kwargs = record_spy.await_args.kwargs
+        assert kwargs["tenant_id"] == env["tenant"]
+        assert kwargs["events"][0]["employee_id"] == employee_id
+        assert kwargs["events"][0]["event_type"] == "ui_page_view"
+    finally:
+        env["app"].dependency_overrides.clear()
+        behavior_api._reset_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_behavior_endpoint_resolves_employee_by_email(client, monkeypatch):
+    """无 employee_id 的事件应按当前用户 email 匹配员工后写入."""
+    import app.api.v1.behavior as behavior_api
+
+    env = _behavior_api_env()
+    matched_employee_id = uuid4()
+
+    async def _fake_resolve(session, tid, email):
+        assert tid == env["tenant"]
+        return matched_employee_id
+
+    monkeypatch.setattr("app.api.v1.behavior.resolve_employee_id_by_email", _fake_resolve)
+    record_spy = AsyncMock(return_value=1)
+    monkeypatch.setattr("app.api.v1.behavior.record_behavior_events", record_spy)
+
+    try:
+        resp = client.post(
+            "/api/v1/behavior/events",
+            json={"events": [{"event_type": "ui_feature_use", "payload": {"feature": "report_export"}}]},
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert resp.status_code == 202
+        assert resp.json()["accepted"] == 1
+        kwargs = record_spy.await_args.kwargs
+        assert kwargs["events"][0]["employee_id"] == matched_employee_id
+    finally:
+        env["app"].dependency_overrides.clear()
+        behavior_api._reset_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_behavior_endpoint_drops_events_without_employee_match(client, monkeypatch):
+    """当前用户无匹配员工（管理账号）→ 事件被丢弃（accepted=0，不写库）."""
+    import app.api.v1.behavior as behavior_api
+
+    env = _behavior_api_env(role="admin")
+
+    async def _fake_resolve(session, tid, email):
+        return None
+
+    monkeypatch.setattr("app.api.v1.behavior.resolve_employee_id_by_email", _fake_resolve)
+    record_spy = AsyncMock(return_value=0)
+    monkeypatch.setattr("app.api.v1.behavior.record_behavior_events", record_spy)
+
+    try:
+        resp = client.post(
+            "/api/v1/behavior/events",
+            json={"events": [{"event_type": "ui_page_view", "payload": {"route": "/dashboard"}}]},
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["received"] == 1
+        assert data["accepted"] == 0
+        record_spy.assert_not_awaited()  # 无有效行 → 不触碰写路径
+    finally:
+        env["app"].dependency_overrides.clear()
+        behavior_api._reset_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_behavior_endpoint_mixed_batch_partial_accept(client, monkeypatch):
+    """混合批次：显式 employee 的事件写入，无主体事件丢弃 → 部分接受."""
+    import app.api.v1.behavior as behavior_api
+
+    env = _behavior_api_env()
+    employee_id = uuid4()
+
+    async def _fake_resolve(session, tid, email):
+        return None  # 无显式 employee_id 的事件全部无法匹配
+
+    monkeypatch.setattr("app.api.v1.behavior.resolve_employee_id_by_email", _fake_resolve)
+    record_spy = AsyncMock(return_value=1)
+    monkeypatch.setattr("app.api.v1.behavior.record_behavior_events", record_spy)
+
+    try:
+        resp = client.post(
+            "/api/v1/behavior/events",
+            json={"events": [
+                {"event_type": "ui_report_view", "employee_id": str(employee_id)},
+                {"event_type": "ui_page_view", "payload": {"route": "/risk"}},
+            ]},
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["received"] == 2
+        assert data["accepted"] == 1
+        # 仅显式 employee 的事件进入写路径
+        events_arg = record_spy.await_args.kwargs["events"]
+        assert len(events_arg) == 1
+        assert events_arg[0]["event_type"] == "ui_report_view"
+    finally:
+        env["app"].dependency_overrides.clear()
+        behavior_api._reset_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_behavior_endpoint_rate_limited(client, monkeypatch):
+    """超限（>300 条/窗口）应返回 429 并丢弃."""
+    import app.api.v1.behavior as behavior_api
+
+    env = _behavior_api_env()
+    # 压过限流阈值：299 + 2 = 301 > 300
+    behavior_api._rate_windows[str(env["tenant"])] = (int(time.time()), 299)
+
+    try:
+        resp = client.post(
+            "/api/v1/behavior/events",
+            json={"events": [
+                {"event_type": "ui_feature_use", "employee_id": str(uuid4())},
+                {"event_type": "ui_feature_use", "employee_id": str(uuid4())},
+            ]},
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert resp.status_code == 429
+    finally:
+        env["app"].dependency_overrides.clear()
+        behavior_api._reset_rate_limiter()
+
+
+@pytest.mark.asyncio
+async def test_behavior_endpoint_rejects_invalid_batch(client, monkeypatch):
+    """空批次（0 条）应被 422 拒绝（min_length=1）."""
+    env = _behavior_api_env()
+    try:
+        resp = client.post(
+            "/api/v1/behavior/events",
+            json={"events": []},
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert resp.status_code == 422
+    finally:
+        env["app"].dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_behavior_endpoint_requires_auth(client, monkeypatch):
+    """未携带 token → 401（继承 get_current_user 鉴权）."""
+    resp = client.post(
+        "/api/v1/behavior/events",
+        json={"events": [{"event_type": "ui_page_view"}]},
+    )
+    assert resp.status_code == 401

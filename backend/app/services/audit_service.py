@@ -50,12 +50,15 @@ async def append_audit_log(
       2. 计算当前条 current_hash
       3. 插入新记录
     """
-    # 获取上一条 current_hash（按租户隔离）
+    # 获取上一条 current_hash（按租户隔离）。
+    # FOR UPDATE：并发追加时串行化链尾读取（后到事务会看到先到事务已提交的
+    # 新链尾），避免两个事务读到同一 prev_hash 导致哈希链分叉。
     stmt = (
         select(AuditLog)
         .where(AuditLog.tenant_id == tenant_id)
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .limit(1)
+        .with_for_update()
     )
     result = await db.execute(stmt)
     last_log = result.scalar_one_or_none()
@@ -92,33 +95,49 @@ async def append_audit_log(
     return log
 
 
-async def verify_hash_chain(db: AsyncSession, tenant_id: UUID) -> bool:
-    """校验租户审计日志哈希链完整性."""
-    stmt = (
-        select(AuditLog)
-        .where(AuditLog.tenant_id == tenant_id)
-        .order_by(AuditLog.created_at.asc(), AuditLog.id.asc())
-    )
-    result = await db.execute(stmt)
-    logs = result.scalars().all()
+_VERIFY_BATCH_SIZE = 1000
 
+
+async def verify_hash_chain(db: AsyncSession, tenant_id: UUID) -> bool:
+    """校验租户审计日志哈希链完整性（按 ID 分批迭代，避免全量载入内存）."""
+    last_id: UUID | None = None
     prev = GENESIS_HASH
-    for log in logs:
-        if log.prev_hash != prev:
-            logger.error("哈希链断裂：log_id=%s 期望 prev=%s 实际 prev=%s", log.id, prev, log.prev_hash)
-            return False
-        payload = {
-            "tenant_id": str(log.tenant_id),
-            "user_id": str(log.user_id) if log.user_id else None,
-            "action": log.action,
-            "resource_type": log.resource_type,
-            "resource_id": str(log.resource_id) if log.resource_id else None,
-            "before_value": log.before_value,
-            "after_value": log.after_value,
-        }
-        expected = _compute_hash(prev, payload, log.created_at)
-        if log.current_hash != expected:
-            logger.error("哈希校验失败：log_id=%s", log.id)
-            return False
-        prev = log.current_hash
+    while True:
+        stmt = (
+            select(AuditLog)
+            .where(AuditLog.tenant_id == tenant_id)
+            .order_by(AuditLog.id.asc())
+            .limit(_VERIFY_BATCH_SIZE)
+        )
+        if last_id is not None:
+            stmt = stmt.where(AuditLog.id > last_id)
+        logs = (await db.execute(stmt)).scalars().all()
+        if not logs:
+            break
+
+        for log in logs:
+            if log.prev_hash != prev:
+                logger.error(
+                    "哈希链断裂：log_id=%s 期望 prev=%s 实际 prev=%s",
+                    log.id, prev, log.prev_hash,
+                )
+                return False
+            payload = {
+                "tenant_id": str(log.tenant_id),
+                "user_id": str(log.user_id) if log.user_id else None,
+                "action": log.action,
+                "resource_type": log.resource_type,
+                "resource_id": str(log.resource_id) if log.resource_id else None,
+                "before_value": log.before_value,
+                "after_value": log.after_value,
+            }
+            expected = _compute_hash(prev, payload, log.created_at)
+            if log.current_hash != expected:
+                logger.error("哈希校验失败：log_id=%s", log.id)
+                return False
+            prev = log.current_hash
+            last_id = log.id
+
+        if len(logs) < _VERIFY_BATCH_SIZE:
+            break
     return True

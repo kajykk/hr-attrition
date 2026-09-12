@@ -269,7 +269,7 @@ class RiskService:
         now = datetime.now(UTC)
 
         # 5. 写入 risk_predictions 表（写失败直接抛出，由 API 层返回 500；不再静默吞掉）
-        feature_values = {col: float(structured_df.iloc[0][col]) for col in structured_df.columns}
+        feature_values = {k: float(v) for k, v in structured_df.iloc[0].to_dict().items()}
         record = RiskPrediction(
             tenant_id=tenant_id,
             employee_id=employee_id,

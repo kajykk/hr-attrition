@@ -21,9 +21,8 @@ _cwd = str(Path.cwd())
 if _cwd not in sys.path:
     sys.path.insert(0, _cwd)
 
-from sqlalchemy import select  # noqa: E402
-
 import pyotp  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
 from app.core import pii_crypto  # noqa: E402
 from app.db.session import async_session_factory  # noqa: E402
@@ -41,7 +40,7 @@ async def main() -> None:
         s = u.totp_secret
         try:
             s = pii_crypto.decrypt(s)
-        except Exception:
+        except Exception:  # noqa: BLE001 - 解密失败按存量明文/异环境密文处理（提示见下）
             # 解密失败说明当前环境的 PII 密钥与写入时不一致，
             # 此时拿到的可能是密文，pyotp 会报 Non-base32——请改用方式 A 在容器内执行。
             pass

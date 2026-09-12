@@ -295,6 +295,83 @@ def test_login_expired_lock_resets_counter(client, monkeypatch):
 
 
 # ============================================================
+# 4.5 Refresh Token HttpOnly Cookie（XSS 缓解契约）
+# ============================================================
+
+
+def test_login_sets_httponly_refresh_cookie_and_omits_body_token(client, monkeypatch):
+    """登录成功：refresh token 经 Set-Cookie 下发（HttpOnly），响应体不再返回."""
+    from app.core.config import settings
+    from app.core.rate_limit import limiter
+
+    app, _user, _calls = _make_login_env(monkeypatch)
+    try:
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": "lock@example.com", "password": "correct"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["access_token"]
+        assert body["refresh_token"] is None  # 凭据不落 JS 可读存储
+
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert f"{settings.REFRESH_COOKIE_NAME}=" in set_cookie
+        assert "httponly" in set_cookie.lower()
+        assert "samesite=strict" in set_cookie.lower()
+        assert "path=/api/v1/auth" in set_cookie.lower()
+    finally:
+        limiter.reset()
+        app.dependency_overrides.clear()
+
+
+def test_refresh_via_cookie_rotates_and_rebinds_cookie(client, monkeypatch):
+    """无请求体凭据时从 HttpOnly Cookie 读取 refresh token 并轮换回写 cookie."""
+    from app.core.config import settings
+    from app.core.rate_limit import limiter
+    from app.core.security import create_refresh_token
+
+    app, user, _calls = _make_login_env(monkeypatch)
+    try:
+        refresh = create_refresh_token(str(user.id), str(user.tenant_id))
+        client.cookies.set(settings.REFRESH_COOKIE_NAME, refresh, path="/api/v1/auth")
+
+        resp = client.post("/api/v1/auth/refresh", json={})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["access_token"]
+        assert body["refresh_token"] is None  # 新凭据经 cookie 回发
+        assert f"{settings.REFRESH_COOKIE_NAME}=" in resp.headers.get("set-cookie", "")
+    finally:
+        limiter.reset()
+        app.dependency_overrides.clear()
+        client.cookies.clear()
+
+
+def test_logout_clears_refresh_cookie(client):
+    """登出：清除 refresh cookie 且幂等返回 200."""
+    from uuid import uuid4
+
+    from app.core.config import settings
+    from app.core.security import create_refresh_token
+
+    refresh = create_refresh_token(str(uuid4()), str(uuid4()))
+    client.cookies.set(settings.REFRESH_COOKIE_NAME, refresh, path="/api/v1/auth")
+    resp = client.post("/api/v1/auth/logout")
+    assert resp.status_code == 200
+    assert resp.json() == {"logged_out": True}
+    # delete_cookie 应下发过期指令
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert settings.REFRESH_COOKIE_NAME in set_cookie
+    assert 'max-age=0' in set_cookie.lower() or 'expires=' in set_cookie.lower()
+
+    # 幂等：无 cookie 再登出仍 200
+    client.cookies.clear()
+    resp2 = client.post("/api/v1/auth/logout")
+    assert resp2.status_code == 200
+
+
+# ============================================================
 # 5. TOTP 存量明文兼容 + 写回加密
 # ============================================================
 

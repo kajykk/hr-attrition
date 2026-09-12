@@ -63,7 +63,7 @@ jobs:
         run: pytest -q
 
   frontend:
-    name: frontend (lint + build)
+    name: frontend (lint + test + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -79,5 +79,9 @@ jobs:
         run: npm ci
       - name: Lint
         run: npm run lint
+      - name: Type check
+        run: npx vue-tsc --noEmit
+      - name: Unit tests
+        run: npm test
       - name: Build
         run: npm run build

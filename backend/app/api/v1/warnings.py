@@ -65,6 +65,93 @@ async def _log_warning_audit(
                        action, warning.id, e)
 
 
+async def _precheck_for_transition(
+    db: AsyncSession,
+    tenant_id,
+    warning_id: UUID,
+    *,
+    check_appeal_limit: bool,
+) -> WarningRecord:
+    """转换前预检：404 语义前置 +（可选）appealing 入口申诉次数上限（409）."""
+    precheck_stmt = select(WarningRecord).where(
+        WarningRecord.id == warning_id,
+        WarningRecord.tenant_id == tenant_id,
+    )
+    existing = (await db.execute(precheck_stmt)).scalar_one_or_none()
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
+    if check_appeal_limit:
+        try:
+            WarningService.check_appeal_limit(existing)
+        except AppealLimitExceeded as e:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    return existing
+
+
+async def _transition_and_finalize(
+    db: AsyncSession,
+    tenant_id,
+    warning_id: UUID,
+    *,
+    target_status: str,
+    operator_id,
+    comment: str | None,
+    audit_action: str,
+    audit_after: dict,
+) -> WarningRecord:
+    """统一执行状态转换并完成收尾（状态/appeal 计数/事件/行为事件/审计日志）.
+
+    status 与 appeal 两个端点的公共管线：
+      apply_transition（FOR UPDATE 行锁）→ appealing 计数 → WarningEvent →
+      warning_transition 行为事件（best-effort）→ 审计日志（best-effort）。
+    """
+    try:
+        result = await WarningService.apply_transition(
+            db=db,
+            tenant_id=tenant_id,
+            warning_id=warning_id,
+            target_status=target_status,
+            operator_id=operator_id,
+            comment=comment,
+        )
+    except ValueError as e:
+        # 非法状态转换（约束 7）
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
+    w, from_status, to_status = result
+
+    if to_status == STATUS_APPEALING:
+        w.appeal_count = (w.appeal_count or 0) + 1
+
+    # 记录事件（审计追溯）
+    event = WarningEvent(
+        tenant_id=tenant_id,
+        warning_id=w.id,
+        action=to_status,
+        from_status=from_status,
+        to_status=to_status,
+        operator_id=operator_id,
+        comment=comment,
+        created_at=datetime.now(UTC),
+    )
+    db.add(event)
+    await db.flush()
+    # 行为特征基建（README 路线图第一步）：状态流转记 warning_transition 事件
+    # （best-effort，内部失败降级跳过，不阻断预警处理）
+    from app.services.behavior_service import record_warning_transition_event
+    await record_warning_transition_event(db, w, operator_id, from_status, to_status)
+    await db.refresh(w)
+
+    # 审计日志（P2-10）
+    await _log_warning_audit(
+        db, tenant_id, audit_action, w, operator_id,
+        before={"status": from_status},
+        after=audit_after,
+    )
+    return w
+
+
 @router.get("", response_model=PaginatedWarnings)
 async def list_warnings(
     page: int = Query(1, ge=1),
@@ -138,65 +225,20 @@ async def update_warning_status(
     tenant_id = get_current_tenant_id()
 
     # 预检：404 语义前置 + appealing 入口申诉次数上限（409）
-    precheck_stmt = select(WarningRecord).where(
-        WarningRecord.id == warning_id,
-        WarningRecord.tenant_id == tenant_id,
+    await _precheck_for_transition(
+        db, tenant_id, warning_id,
+        check_appeal_limit=(payload.target_status == STATUS_APPEALING),
     )
-    existing = (await db.execute(precheck_stmt)).scalar_one_or_none()
-    if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
-    if payload.target_status == STATUS_APPEALING:
-        try:
-            WarningService.check_appeal_limit(existing)
-        except AppealLimitExceeded as e:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
-    operator_id = user.id  # 操作人从认证用户派生（防审计伪造）
-    try:
-        result = await WarningService.apply_transition(
-            db=db,
-            tenant_id=tenant_id,
-            warning_id=warning_id,
-            target_status=payload.target_status,
-            operator_id=operator_id,
-            comment=payload.comment,
-        )
-    except ValueError as e:
-        # 非法状态转换（约束 7）
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
-    if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
-    w, from_status, to_status = result
-
-    if to_status == STATUS_APPEALING:
-        w.appeal_count = (w.appeal_count or 0) + 1
-
-    # 记录事件（审计追溯）
-    event = WarningEvent(
-        tenant_id=tenant_id,
-        warning_id=w.id,
-        action=to_status,
-        from_status=from_status,
-        to_status=to_status,
-        operator_id=operator_id,
+    # 操作人从认证用户派生（防审计伪造）；收尾管线见 _transition_and_finalize
+    w = await _transition_and_finalize(
+        db, tenant_id, warning_id,
+        target_status=payload.target_status,
+        operator_id=user.id,
         comment=payload.comment,
-        created_at=datetime.now(UTC),
+        audit_action="warning.transition",
+        audit_after={"status": payload.target_status, "comment": payload.comment},
     )
-    db.add(event)
-    await db.flush()
-    # 行为特征基建（README 路线图第一步）：状态流转记 warning_transition 事件
-    # （best-effort，内部失败降级跳过，不阻断预警处理）
-    from app.services.behavior_service import record_warning_transition_event
-    await record_warning_transition_event(db, w, operator_id, from_status, to_status)
-    await db.refresh(w)
-
-    # 审计日志（P2-10）
-    await _log_warning_audit(
-        db, tenant_id, "warning.transition", w, operator_id,
-        before={"status": from_status},
-        after={"status": to_status, "comment": payload.comment},
-    )
-
     return WarningOut.model_validate(w)
 
 
@@ -218,68 +260,24 @@ async def appeal_warning(
     非法转换（如 closed → appealing）返回 422。
     """
     tenant_id = get_current_tenant_id()
-    precheck_stmt = select(WarningRecord).where(
-        WarningRecord.id == warning_id,
-        WarningRecord.tenant_id == tenant_id,
-    )
-    existing = (await db.execute(precheck_stmt)).scalar_one_or_none()
-    if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
 
-    # 申诉次数上限（409 语义）
-    try:
-        WarningService.check_appeal_limit(existing)
-    except AppealLimitExceeded as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    # 预检：404 语义前置 + 申诉次数上限（409 语义）
+    await _precheck_for_transition(db, tenant_id, warning_id, check_appeal_limit=True)
 
     # 拼接申诉理由作为备注
     comment = f"[申诉] {payload.reason}"
     if payload.description:
         comment += f" | {payload.description}"
 
-    operator_id = user.id  # 操作人从认证用户派生（防审计伪造）
-    try:
-        result = await WarningService.apply_transition(
-            db=db,
-            tenant_id=tenant_id,
-            warning_id=warning_id,
-            target_status="appealing",
-            operator_id=operator_id,
-            comment=comment,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
-    if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="预警不存在")
-    w, from_status, to_status = result
-
-    w.appeal_count = (w.appeal_count or 0) + 1
-
-    # 记录事件（action=appealing，审计追溯）
-    event = WarningEvent(
-        tenant_id=tenant_id,
-        warning_id=w.id,
-        action="appealing",
-        from_status=from_status,
-        to_status=to_status,
-        operator_id=operator_id,
+    # 操作人从认证用户派生（防审计伪造）；收尾管线见 _transition_and_finalize
+    w = await _transition_and_finalize(
+        db, tenant_id, warning_id,
+        target_status="appealing",
+        operator_id=user.id,
         comment=comment,
-        created_at=datetime.now(UTC),
+        audit_action="warning.appeal",
+        audit_after={"status": "appealing", "reason": payload.reason},
     )
-    db.add(event)
-    await db.flush()
-    # 行为特征基建：申诉也是状态流转，记 warning_transition 事件（best-effort）
-    from app.services.behavior_service import record_warning_transition_event
-    await record_warning_transition_event(db, w, operator_id, from_status, to_status)
-    await db.refresh(w)
-
-    # 审计日志（P2-10）
-    await _log_warning_audit(
-        db, tenant_id, "warning.appeal", w, operator_id,
-        before={"status": from_status},
-        after={"status": to_status, "reason": payload.reason},
-    )
-
     return WarningOut.model_validate(w)
 
 

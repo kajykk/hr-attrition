@@ -1,17 +1,33 @@
-<script setup lang="ts">
-// 仪表盘视图 - KPI 卡片 + 风险分布条形图 + 最近预警 + Kill Switch 状态
-import { ref, computed, onMounted } from 'vue'
+﻿<script setup lang="ts">
+import { fmtTime } from '@/utils/format'
+// 仪表盘视图 - KPI 卡片 + 风险分布条形图 + 最近预警 + Kill Switch 状态 + 实时推送
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { apiClient } from '@/api/client'
-import type { EmployeeListItem, WarningOut, Paginated, KillSwitchStatus } from '@/api/types'
+import { getAccessToken } from '@/api/auth-keys'
+import { useWebSocket, type RiskUpdatePayload } from '@/composables/useWebSocket'
+import { useAuthStore } from '@/stores/auth'
+import type { WarningOut, Paginated, KillSwitchStatus } from '@/api/types'
+
+const auth = useAuthStore()
 
 // 演示数据仅限开发环境；生产环境失败展示真实错误
 const allowDemo = import.meta.env.DEV
+
+// 触发演示占位数据的最低失败项数（DEV 环境，多数关键块失败才切换演示）
+const DEMO_FAILURE_THRESHOLD = 4
 
 interface KpiStats {
   totalEmployees: number
   highRiskCount: number
   pendingWarnings: number
   modelVersion: string
+}
+
+// 后端 /employees/stats/risk-distribution 响应（全量聚合口径）
+interface RiskDistributionStats {
+  total_employees: number
+  high_risk_count: number
+  distribution: Record<string, number>
 }
 
 const stats = ref<KpiStats>({
@@ -58,18 +74,22 @@ async function loadDashboard() {
   loading.value = true
   errorMsg.value = ''
   const failures: string[] = []
+
+  // Kill Switch 为 admin-only 接口：非管理员角色不请求（否则每次进首页必吃 403）
+  const isAdmin = auth.user?.role === 'admin'
+
   const results = await Promise.allSettled([
-    // 1. 员工总数 + 风险分布
-    apiClient.get<Paginated<EmployeeListItem>>('/api/v1/employees', {
-      params: { page: 1, page_size: 200 },
-    }),
+    // 1. 员工总数 + 风险分布（后端全量聚合，不再受分页上限影响）
+    apiClient.get<RiskDistributionStats>('/api/v1/employees/stats/risk-distribution'),
     // 2. 最近 5 条预警 + 待处理数（并行）
     apiClient.get<Paginated<WarningOut>>('/api/v1/warnings', { params: { page: 1, page_size: 5 } }),
     apiClient.get<Paginated<WarningOut>>('/api/v1/warnings', {
       params: { page: 1, page_size: 1, status: 'new' },
     }),
-    // 3. Kill Switch 状态
-    apiClient.get<KillSwitchStatus>('/api/v1/admin/kill-switch'),
+    // 3. Kill Switch 状态（仅管理员）
+    isAdmin
+      ? apiClient.get<KillSwitchStatus>('/api/v1/admin/kill-switch')
+      : (Promise.resolve({ data: null }) as Promise<{ data: KillSwitchStatus | null }>),
     // 4. 模型版本（从全局解释接口取）
     apiClient.get<{ model_version: string }>('/api/v1/risk/global-explanation', {
       params: { window_days: 30 },
@@ -78,20 +98,12 @@ async function loadDashboard() {
   const ok = (r: PromiseSettledResult<unknown>) => r.status === 'fulfilled'
 
   if (ok(results[0])) {
-    const data = (results[0] as PromiseFulfilledResult<{ data: Paginated<EmployeeListItem> }>).value.data
-    stats.value.totalEmployees = data.total
-    const dist: Record<string, number> = {
-      low: 0,
-      medium_low: 0,
-      medium: 0,
-      medium_high: 0,
-      high: 0,
-    }
-    for (const e of data.items) {
-      if (e.risk_level && dist[e.risk_level] !== undefined) dist[e.risk_level]++
-    }
-    distribution.value = Object.entries(dist).map(([level, count]) => ({ level, count }))
-    stats.value.highRiskCount = (dist.medium_high || 0) + (dist.high || 0)
+    const data = (results[0] as PromiseFulfilledResult<{ data: RiskDistributionStats }>).value.data
+    stats.value.totalEmployees = data.total_employees
+    stats.value.highRiskCount = data.high_risk_count
+    distribution.value = Object.entries(data.distribution)
+      .filter(([level]) => level !== 'unscored')
+      .map(([level, count]) => ({ level, count }))
   } else {
     failures.push('员工统计')
   }
@@ -102,11 +114,15 @@ async function loadDashboard() {
   }
   if (ok(results[2])) {
     stats.value.pendingWarnings = (results[2] as PromiseFulfilledResult<{ data: Paginated<WarningOut> }>).value.data.total
-  }
-  if (ok(results[3])) {
-    killSwitch.value = (results[3] as PromiseFulfilledResult<{ data: KillSwitchStatus }>).value.data
   } else {
-    failures.push('Kill Switch 状态')
+    failures.push('待处理预警数')
+  }
+  if (isAdmin) {
+    if (ok(results[3]) && (results[3] as PromiseFulfilledResult<{ data: KillSwitchStatus | null }>).value.data) {
+      killSwitch.value = (results[3] as PromiseFulfilledResult<{ data: KillSwitchStatus }>).value.data
+    } else {
+      failures.push('Kill Switch 状态')
+    }
   }
   if (ok(results[4])) {
     stats.value.modelVersion = (results[4] as PromiseFulfilledResult<{ data: { model_version: string } }>).value.data.model_version
@@ -117,7 +133,7 @@ async function loadDashboard() {
   if (failures.length > 0) {
     errorMsg.value = `部分数据加载失败：${failures.join('、')}`
     // 演示数据仅限开发环境
-    if (allowDemo && failures.length >= 4) {
+    if (allowDemo && failures.length >= DEMO_FAILURE_THRESHOLD) {
       demoMode.value = true
       errorMsg.value += '（开发环境演示数据）'
       fillDemoPlaceholders()
@@ -187,18 +203,35 @@ function fillDemoPlaceholders() {
   ]
 }
 
-function fmtTime(s: string) {
-  if (!s) return '-'
-  try {
-    return new Date(s).toLocaleString('zh-CN', { hour12: false })
-  } catch {
-    return s
-  }
-}
 
 function levelBadgeClass(level: string) {
   return `badge-${level.toLowerCase()}`
 }
+
+// ===== 实时风险推送（WS /ws/risk）：预测更新后防抖刷新 KPI/分布/最近预警 =====
+const WS_RELOAD_DEBOUNCE_MS = 2000
+let wsReloadTimer: ReturnType<typeof setTimeout> | null = null
+
+function reloadOnRiskUpdate(_payload: RiskUpdatePayload): void {
+  if (wsReloadTimer) clearTimeout(wsReloadTimer)
+  wsReloadTimer = setTimeout(() => {
+    wsReloadTimer = null
+    void loadDashboard()
+  }, WS_RELOAD_DEBOUNCE_MS)
+}
+
+// 已登录才建连（useWebSocket 内部自带重连退避与卸载清理；连接失败静默降级）
+if (getAccessToken()) {
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  const wsUrl = `${scheme}://${window.location.host}/api/v1/ws/risk?token=${encodeURIComponent(getAccessToken() as string)}`
+  const feed = useWebSocket(wsUrl)
+  feed.on<RiskUpdatePayload>('risk_update', reloadOnRiskUpdate)
+  feed.connect()
+}
+
+onUnmounted(() => {
+  if (wsReloadTimer) clearTimeout(wsReloadTimer)
+})
 
 onMounted(loadDashboard)
 </script>

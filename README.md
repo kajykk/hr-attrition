@@ -6,7 +6,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-async-009688)](https://fastapi.tiangolo.com/)
 [![Vue 3](https://img.shields.io/badge/Vue_3+TS-Vite-42b883)](https://vuejs.org/)
 [![ML](https://img.shields.io/badge/LightGBM+SHAP-ML-ff69b4)](https://lightgbm.readthedocs.io/)
-[![Tests](https://img.shields.io/badge/Tests-314+-green)](backend/tests)
+[![Tests](https://img.shields.io/badge/Tests-480+-green)](backend/tests)
 
 ---
 
@@ -26,7 +26,7 @@
 | **隐私与合规** | Fernet **字段级加密**（姓名/身份证/手机号/薪资等 6 字段）+ SHA256 检索哈希 + 季度密钥轮换；PIPL 数据保留清理（离职 ≥2 年自动清除）；AI 提示词 PII 脱敏 |
 | **安全体系** | RBAC 五角色（admin / hr_manager / hrbp / manager / employee）+ 管理员**强制 TOTP 2FA**、登录限流（5/min）、SHA256 审计哈希链 |
 | **实时与 AI** | WebSocket 实时风险推送（租户隔离）；AI 留存建议 SSE 流式输出（Qwen-Max → DeepSeek → 规则模板三级回退） |
-| **工程化** | 314+ 测试用例、多租户行级隔离、Alembic 迁移、Celery Beat 定时治理任务、Prometheus + Grafana + Loki 可观测、JSON 结构化日志全链路追踪 |
+| **工程化** | 475+ 测试用例、多租户行级隔离、Alembic 迁移、Celery Beat 定时治理任务、Prometheus + Grafana + Loki 可观测、JSON 结构化日志全链路追踪 |
 
 ## 模型效果（测试集 10,000 条）
 
@@ -48,6 +48,7 @@
 |---|---|
 | 事件表 | `behavior_events`：tenant_id + employee_id + event_type + payload + occurred_at，复合索引 `ix_behavior_events_tenant_emp_time`（tenant 打头、occurred_at DESC）支撑近 30 天窗口查询 |
 | 事件来源 | **登录成功**（auth.py）记 `login` 事件——User 与 Employee 无外键，按租户内 email best-effort 匹配员工，未匹配则跳过；**预警状态流转**（warnings.py，含申诉路径）记 `warning_transition` 事件；**风险预测查看**（risk.py GET /risk/employees/{id}）记 `risk_prediction_viewed` 事件；**风险报表导出**（risk.py POST /risk/reports/export）记 `report_exported` 事件（同样按登录账号 email 匹配员工，未匹配则跳过，HR 管理账号不污染行为特征）。写入均为 best-effort：失败仅告警，不阻断业务 |
+| 前端埋点管道 | 前端页面停留 / 功能使用 / 报表查看经 `POST /api/v1/behavior/events` 批量上报（`ui_page_view` / `ui_feature_use` / `ui_report_view`，路由切换 + visibilitychange 分段时间累计，停留 <1s 丢弃）；事件同样按「显式 employee_id 或当前用户 email 匹配员工」落库，管理账号事件丢弃；客户端 5s/20 条缓冲批量 + sendBeacon 卸载兜底，全部 best-effort |
 | 聚合方式 | 按「天 × event_type」计数，30 天切 12 个窗口（每窗口约 2-3 天），供 IsolationForest 行为模态推理（ml/feature_provider.py） |
 | real/demo 判定 | 近 30 天聚合事件总数 ≥ 5 条 → 真实模式；**< 5 条回退 demo 构造**（由 employee.id 播种确定性生成，无随机注入） |
 | 来源标注 | 风险预测 API 响应以 `behavior_data_source` 字段暴露实际来源：`"real"`（真实事件聚合）/ `"demo"`（演示回退） |
@@ -135,20 +136,26 @@ cp .env.example .env
 
 ## 测试与质量
 
-**288+ 测试用例**（12 个测试文件，覆盖真实应用注入）：
+**后端 480+ 测试用例**（17 个测试文件，真实应用注入）+ **前端 40 个 vitest 测试**（7 个文件：SSE 解析器、格式化工具、auth store、路由守卫、布局菜单角色过滤、行为埋点管道）：
 
 | 领域 | 用例数 | 覆盖内容 |
 |---|---|---|
+| 预警状态机 | 75 | 全状态流转 + 升级路径 + API 契约 |
 | 覆盖率补强 | 68 | 边缘分支 / 异常路径 |
 | 服务层 | 43 | 风控、预警、审计、LLM 服务 |
-| API 端点 | 33 | 认证、员工、风险、管理端 |
+| API 端点 | 36 | 认证、员工、风险分布统计、管理端 |
 | ML 模块 | 33 | 特征工程、融合、SHAP、公平性 |
-| 风控服务 | 29 | 预测链路、缓存降级 |
+| 风控服务 | 31 | 预测链路、缓存降级 |
+| 行为事件 | 34 | 登录/预警/导出事件接线、前端埋点管道（ui_ 事件）与聚合特征 |
+| KB 模块 | 24 | RAG 检索 / 切分 / PII 扫描 |
+| 迁移契约 | 22 | Alembic 与 ORM 一致性 |
 | 治理端点 | 21 | Kill Switch、漂移、公平性 API |
 | 租户隔离 | 19 | 行级隔离、WebSocket 分区 |
-| 预警状态机 | 16 | 全状态流转 + 升级路径 |
+| 安全加固 | 19 | 登录防爆破 + TOTP + HttpOnly Cookie 契约 |
 | 数据保留 | 13 | PIPL 清理策略 |
+| PII 轮换 | 10 | 多钥回退与重加密 |
 | 特征契约 | 9 | 训练 / 推理特征一致性 |
+| 健康检查 | 6 | 依赖探测与降级语义 |
 
 ## 目录结构
 

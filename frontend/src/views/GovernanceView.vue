@@ -1,4 +1,5 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
+import { fmtTime } from '@/utils/format'
 // 模型治理视图 - Kill Switch + 漂移检测 + 公平性监测 + 模型版本
 import { ref, computed, onMounted } from 'vue'
 import { apiClient, extractApiError } from '@/api/client'
@@ -58,16 +59,16 @@ async function loadAll() {
     apiClient.get<FairnessResult>('/api/v1/admin/fairness'),
   ])
   const ok = (r: PromiseSettledResult<unknown>) => r.status === 'fulfilled'
-  const failedIndexes = results.map((r, i) => (ok(r) ? -1 : i)).filter((i) => i >= 0)
 
   if (ok(results[0])) killSwitch.value = (results[0] as PromiseFulfilledResult<{ data: KillSwitchStatus }>).value.data
   else failures.push('Kill Switch 状态')
   if (ok(results[1])) modelVersion.value = (results[1] as PromiseFulfilledResult<{ data: { model_version: string } }>).value.data.model_version
   else failures.push('模型版本')
+  // 漂移/公平性失败不进入 failures：后端未启用治理数据时属预期空态（下方 demo 兜底）
   if (ok(results[2])) drift.value = (results[2] as PromiseFulfilledResult<{ data: DriftResult }>).value.data
   if (ok(results[3])) fairness.value = (results[3] as PromiseFulfilledResult<{ data: FairnessResult }>).value.data
 
-  if (failedIndexes.length > 0) {
+  if (failures.length > 0) {
     errorMsg.value = `部分数据加载失败：${failures.join('、')}`
   }
   // 演示数据仅限开发环境
@@ -146,14 +147,6 @@ async function submitKs() {
   }
 }
 
-function fmtTime(s?: string | null) {
-  if (!s) return '-'
-  try {
-    return new Date(s).toLocaleString('zh-CN', { hour12: false })
-  } catch {
-    return s
-  }
-}
 
 onMounted(loadAll)
 </script>

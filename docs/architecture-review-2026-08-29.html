@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HRA 架构审查报告 — 2026-08-29</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme:'base', themeVariables:{primaryColor:'#4f46e5'}})</script>
+<style>
+  .card{border:1px solid #e5e7eb;border-radius:16px;background:white;box-shadow:0 4px 24px rgba(0,0,0,.06)}
+  .badge{font-size:.7rem;padding:.2rem .55rem;border-radius:999px;font-weight:700;letter-spacing:.03em}
+  .b-strong{background:#fef2f2;color:#dc2626;border:1px solid #fecaca}
+  .b-worth{background:#fffbeb;color:#d97706;border:1px solid #fde68a}
+  .b-spec{background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0}
+  pre{white-space:pre-wrap;word-break:break-word}
+</style>
+</head>
+<body class="bg-[#f8fafc] text-slate-800">
+<div class="max-w-[1120px] mx-auto px-6 py-10">
+
+  <!-- Header -->
+  <div class="mb-8">
+    <div class="text-xs tracking-widest text-slate-400 font-semibold">HRA · HR-ATTRITION · ARCHITECTURE REVIEW</div>
+    <h1 class="text-3xl font-extrabold tracking-tight mt-2">全量代码审查 &amp; 架构深化机会 <span class="text-indigo-600">7 Candidates</span></h1>
+    <p class="text-slate-500 mt-3 leading-relaxed">扫描范围：<code>backend/app</code> 2.8k 行热点 + <code>frontend/src</code> 9 视图 · 基于 <code>git log --oneline -30</code> 热点加权（behavior 埋点 / RAG / warning 状态机 / PII 轮换为近月高频变更区）。方法：寻找<b>浅模块</b>（接口≈实现）、跨缝泄漏、测试需多处打桩才能覆盖的局部性缺失。</p>
+    <div class="flex gap-2 mt-4 flex-wrap">
+      <span class="badge bg-indigo-50 text-indigo-700 border border-indigo-200">Backend: FastAPI + SQLAlchemy async + Celery + pgvector</span>
+      <span class="badge bg-sky-50 text-sky-700 border border-sky-200">Frontend: Vue3 + Pinia + Element Plus + Vite</span>
+      <span class="badge bg-slate-900 text-white">314+ tests · 282 核心用例通过</span>
+    </div>
+  </div>
+
+  <!-- Hotspot map -->
+  <div class="card p-6 mb-8">
+    <h2 class="font-bold text-lg">热点地图（git log 加权）</h2>
+    <div class="grid md:grid-cols-2 gap-6 mt-4">
+      <div>
+        <div class="text-xs font-semibold text-slate-400 tracking-widest mb-2">最常改动的 7 个文件（行数）</div>
+        <div class="space-y-1.5 text-sm font-mono">
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-1.5"><span>app/ml/feature_provider.py</span><span class="text-red-500 font-bold">550</span></div>
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-1.5"><span>app/services/risk_service.py</span><span class="text-red-500 font-bold">474</span></div>
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-1.5"><span>app/kb/service.py</span><span class="text-red-500 font-bold">402</span></div>
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-1.5"><span>app/api/v1/employees.py</span><span class="text-amber-600 font-bold">387</span></div>
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-1.5"><span>app/api/v1/auth.py</span><span class="text-amber-600 font-bold">383</span></div>
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-1.5"><span>app/services/warning_service.py</span><span class="text-amber-600 font-bold">365</span></div>
+          <div class="flex justify-between bg-slate-50 rounded px-3 py-1.5"><span>frontend/src/views/WarningsView.vue</span><span class="text-amber-600 font-bold">748</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="text-xs font-semibold text-slate-400 tracking-widest mb-2">近 30 提交主题分布</div>
+        <div class="text-sm leading-7">
+          <span class="inline-block bg-violet-100 text-violet-700 rounded-full px-3 py-0.5 text-xs font-bold mr-1">RAG 知识库 5</span>
+          <span class="inline-block bg-emerald-100 text-emerald-700 rounded-full px-3 py-0.5 text-xs font-bold mr-1">行为埋点 4</span>
+          <span class="inline-block bg-amber-100 text-amber-700 rounded-full px-3 py-0.5 text-xs font-bold mr-1">PII/安全 5</span>
+          <span class="inline-block bg-sky-100 text-sky-700 rounded-full px-3 py-0.5 text-xs font-bold mr-1">预警状态机 3</span>
+          <span class="inline-block bg-rose-100 text-rose-700 rounded-full px-3 py-0.5 text-xs font-bold mr-1">CI/Infra 4</span>
+          <span class="inline-block bg-slate-100 text-slate-700 rounded-full px-3 py-0.5 text-xs font-bold">ML/特征 3</span>
+        </div>
+        <p class="text-xs text-slate-500 mt-3">结论：重构回报最高的区域是 <b>风险预测管线</b>、<b>特征契约</b>、<b>租户隔离</b>——均为高频变更 + 跨模块泄漏最严重处，符合 YAGNI 聚焦原则。</p>
+        <div class="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs leading-relaxed">
+          <b>删除测试（deletion test）信号：</b>若删除 <code>RiskService</code>，其复杂度会分散到 5 个调用方而非集中——说明它是浅模块，需深化。反之若能将缓存/SHAP/预警联动做成管线插件，删除管线只会丢失编排，单步仍可独立测试——即为深模块。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Overall Health Radar (textual) -->
+  <div class="card p-6 mb-8">
+    <h2 class="font-bold text-lg">全量健康度速览（1-5 分）</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4 text-sm">
+      <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4"><div class="font-bold text-emerald-700">安全性 4.2/5</div><div class="text-xs text-slate-600 mt-1">JWT refresh 轮换+jti黑名单、TOTP 加密落库、PII Fernet+HMAC、XFF右起、WS角色过滤 均已落地。剩余：<code>require_tenant_header</code> 死代码未清理、<code>kill_switch</code> fail-open 需审计。</div></div>
+      <div class="bg-amber-50 border border-amber-200 rounded-xl p-4"><div class="font-bold text-amber-700">可测试性 2.8/5</div><div class="text-xs text-slate-600 mt-1">RiskService / feature_provider 需 DB+Redis+模型文件才能测；全局单例 <code>_fusion_engine</code> 用 <code>_reset_singletons()</code> hack。WarningsView 748 行无 composable 抽离。</div></div>
+      <div class="bg-sky-50 border border-sky-200 rounded-xl p-4"><div class="font-bold text-sky-700">可维护性 3.0/5</div><div class="text-xs text-slate-600 mt-1">特征定义在 <code>feature_engineering.py</code> 与 <code>feature_provider.py</code> 两处；租户上下文三处实现；RAG 双 Redis 客户端；前端三文件共管 token。</div></div>
+      <div class="bg-violet-50 border border-violet-200 rounded-xl p-4"><div class="font-bold text-violet-700">性能/健壮性 3.6/5</div><div class="text-xs text-slate-600 mt-1">风险预测已做 <code>to_thread</code> 隔离 CPU 密集；但审计链 <code>FOR UPDATE</code> 串行化、行为事件 30天聚合无物化视图、WS 内存 dict 无横向扩展。</div></div>
+    </div>
+  </div>
+
+  <!-- CANDIDATE 1 -->
+  <div class="card p-6 mb-6">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <h3 class="font-extrabold text-lg"><span class="text-indigo-600">#1</span> 风险预测管线 — 从上帝服务到可插拔 Pipeline</h3>
+      <span class="badge b-strong">Strong — 立即做</span>
+    </div>
+    <div class="text-xs text-slate-500 mt-1">Files: <code>app/services/risk_service.py (474)</code> · <code>app/ml/fusion_engine.py</code> · <code>app/ml/shap_explainer.py</code> · <code>app/api/v1/risk.py</code> · <code>app/core/redis.py</code> · <code>app/api/v1/ws.py</code></div>
+    <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm leading-relaxed">
+      <div><div class="font-bold text-slate-700">Problem</div><p class="text-slate-600 mt-1"><code>RiskService.predict</code> 串行做 9 件事：kill-switch → 读缓存 → 查员工 → 构特征 → 调模型(to_thread) → 写表 → 调SHAP(to_thread) → 写缓存 → WS广播 → 建警。任何一步 mock 失败需同时桩 DB/Redis/模型/WS。全局 <code>_fusion_engine/_shap_explainer</code> 单例 + <code>_reset_singletons()</code> 测试后门是典型浅模块气味。SHAP 与缓存逻辑与预测强耦合，无法单独演进（例如想把 SHAP 改异步）。</p></div>
+      <div><div class="font-bold text-slate-700">Solution</div><p class="text-slate-600 mt-1">抽 <b>RiskPipeline</b> 深模块：<code>Pipeline[Stage]</code>，Stage = <code>LoadEmployee</code> | <code>BuildFeatures</code> | <code>Infer</code> | <code>Persist</code>，其余为 <b>Observer 插件</b>：<code>CacheStage</code>、<code>ShapEnrichment</code>、<code>WarningLink</code>、<code>WsNotify</code>。引擎与解释器改为构造函数注入（不再是模块级全局），由 FastAPI 依赖提供单例。主流程只编排，不感知 Redis/WS。</p></div>
+      <div><div class="font-bold text-slate-700">Benefits</div><p class="text-slate-600 mt-1"><b>局部性：</b>预测核心 4 步可在无 Redis/WS 的单元测试中 100% 覆盖；<b>杠杆：</b>新增“预测后写行为事件”只需加一个 Observer，不改主流程；<b>AI 导航：</b>后续问“风险分怎么算”只需看 Pipeline 一处。</p></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mt-4">
+      <div class="bg-slate-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-slate-500 tracking-widest mb-2">BEFORE</div>
+        <pre class="mermaid">flowchart LR
+  A[API risk.py] --> B[RiskService.predict 474行]
+  B --> C[Redis get/set]
+  B --> D[FusionEngine 全局单例]
+  B --> E[ShapExplainer 全局单例]
+  B --> F[DB RiskPrediction]
+  B --> G[WarningService.create]
+  B --> H[ws.broadcast]
+  style B fill:#fecaca,stroke:#dc2626
+</pre>
+      </div>
+      <div class="bg-indigo-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-indigo-500 tracking-widest mb-2">AFTER</div>
+        <pre class="mermaid">flowchart LR
+  A[API] --> P[RiskPipeline<br/>4 core stages]
+  P --> O1{{CacheObserver}}
+  P --> O2{{ShapObserver}}
+  P --> O3{{WarningObserver}}
+  P --> O4{{WsObserver}}
+  P -.inject.-> E1[FusionEngine]
+  P -.inject.-> E2[ShapExplainer]
+  style P fill:#c7d2fe,stroke:#4f46e5
+</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- CANDIDATE 2 -->
+  <div class="card p-6 mb-6">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <h3 class="font-extrabold text-lg"><span class="text-indigo-600">#2</span> 特征契约 — 单一真相源（SSOT）</h3>
+      <span class="badge b-strong">Strong — 立即做</span>
+    </div>
+    <div class="text-xs text-slate-500 mt-1">Files: <code>app/ml/feature_engineering.py (训练侧 31 列定义)</code> · <code>app/ml/feature_provider.py (550 推理侧重建)</code> · <code>app/ml/models/feature_metadata.pkl</code> · <code>app/api/v1/risk.py</code></div>
+    <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm leading-relaxed">
+      <div><div class="font-bold text-slate-700">Problem</div><p class="text-slate-600 mt-1">同一组 31 列特征在两处手写：<code>STRUCTURED_FEATURE_COLUMNS</code> 在两文件各一份常量，<code>engineer_structured</code> 与 <code>build_structured_features</code> 各自实现编码/派生（overtime/business_travel/dept one-hot 等）。虽有 <code>assert_feature_contract()</code> 运行时校验，但仍是“事后发现”而非“不可能错”。<code>_FEATURE_DEFAULTS</code> 与训练分布中位数分散两处，改一处易漏。</p></div>
+      <div><div class="font-bold text-slate-700">Solution</div><p class="text-slate-600 mt-1">建 <b>FeatureRegistry</b> 深模块：单一 <code>feature_spec.yaml / .py</code> 声明 31 列的来源、类型、one-hot 映射、派生公式、缺省值。训练侧 <code>engineer_*</code> 与推理侧 <code>build_*</code> 均由此 spec 驱动生成（或至少共享同一组纯函数）。<code>feature_metadata.pkl</code> 改为由此 spec 构建时导出，而非手写常量对比。</p></div>
+      <div><div class="font-bold text-slate-700">Benefits</div><p class="text-slate-600 mt-1"><b>局部性：</b>改特征只需改一处 spec，测试只需断言 spec；<b>杠杆：</b>新增“司龄分桶”派生特征时训练/推理自动对齐；消除漂移类线上事故。</p></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mt-4">
+      <div class="bg-slate-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-slate-500 tracking-widest mb-2">BEFORE</div>
+        <pre class="mermaid">flowchart LR
+  S1[feature_engineering.py<br/>STRUCTURED_FEATURE_COLUMNS] --- M[pkl]
+  S2[feature_provider.py<br/>STRUCTURED_FEATURE_COLUMNS<br/>_FEATURE_DEFAULTS] --- M
+  S1 -.assert_contract.-> S2
+  style S1 fill:#fde68a,stroke:#d97706
+  style S2 fill:#fde68a,stroke:#d97706
+</pre>
+      </div>
+      <div class="bg-indigo-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-indigo-500 tracking-widest mb-2">AFTER</div>
+        <pre class="mermaid">flowchart LR
+  R[(FeatureRegistry<br/>spec + defaults)] --> T[engineer_structured]
+  R --> I[build_structured_features]
+  R --> P[feature_metadata.pkl]
+  style R fill:#c7d2fe,stroke:#4f46e5
+</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- CANDIDATE 3 -->
+  <div class="card p-6 mb-6">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <h3 class="font-extrabold text-lg"><span class="text-indigo-600">#3</span> 预警状态机 — 纯域模型 + 持久化适配器</h3>
+      <span class="badge b-worth">Worth exploring</span>
+    </div>
+    <div class="text-xs text-slate-500 mt-1">Files: <code>app/services/warning_service.py (365)</code> · <code>app/models/warning.py</code> · <code>app/api/v1/warnings.py (334)</code> · <code>app/tasks/warning_escalation.py</code></div>
+    <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm leading-relaxed">
+      <div><div class="font-bold text-slate-700">Problem</div><p class="text-slate-600 mt-1">同一文件中既有纯状态校验（<code>validate_transition</code>）、也有 <code>SELECT ... FOR UPDATE</code> 行锁、<code>IntegrityError retry</code>、事件构造、防重建警合并。API 层又重复处理 <code>AppealLimitExceeded → 409</code> 映射。想单测状态矩阵必须建 DB 行锁环境；想改并发策略必须读懂状态机。</p></div>
+      <div><div class="font-bold text-slate-700">Solution</div><p class="text-slate-600 mt-1">拆为 <b>WarningStateMachine</b>（纯函数：给定 from/to/level 决定是否合法）与 <b>WarningRepository</b>（负责 <code>FOR UPDATE</code>、重试、事件落库）。API 层只做 <code>repo.apply(machine, id, target)</code>。重试循环提取为可复用的 <code>with_retry_on_conflict</code> helper，消除 <code>create_warning</code> 与 <code>apply_transition</code> 的重复 for-range-2。</p></div>
+      <div><div class="font-bold text-slate-700">Benefits</div><p class="text-slate-600 mt-1">状态矩阵可用 32 例纯单测毫秒级覆盖（已有的 <code>test_warning_state_machine.py</code> 无需 DB）；并发策略可独立演进为乐观锁/分布式锁而不触状态机。</p></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mt-4">
+      <div class="bg-slate-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-slate-500 tracking-widest mb-2">BEFORE</div>
+        <pre class="mermaid">flowchart LR
+  API --> S[WarningService<br/>校验 + FOR UPDATE + retry + 事件]
+  S --> DB
+  style S fill:#fde68a,stroke:#d97706
+</pre>
+      </div>
+      <div class="bg-indigo-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-indigo-500 tracking-widest mb-2">AFTER</div>
+        <pre class="mermaid">flowchart LR
+  API --> R[WarningRepository<br/>FOR UPDATE + retry]
+  R --> M{{WarningStateMachine<br/>纯函数}}
+  R --> DB
+  style M fill:#c7d2fe,stroke:#4f46e5
+</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- CANDIDATE 4 -->
+  <div class="card p-6 mb-6">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <h3 class="font-extrabold text-lg"><span class="text-indigo-600">#4</span> 租户隔离 — 收敛为单一 AuthContext 深模块</h3>
+      <span class="badge b-strong">Strong — 立即做</span>
+    </div>
+    <div class="text-xs text-slate-500 mt-1">Files: <code>app/core/tenant.py (ContextVar + middleware + deprecated require_tenant_header)</code> · <code>app/api/deps.py (get_current_user)</code> · <code>app/core/security.py</code> · <code>frontend/src/api/client.ts (已移除 X-Tenant-Id)</code></div>
+    <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm leading-relaxed">
+      <div><div class="font-bold text-slate-700">Problem</div><p class="text-slate-600 mt-1">租户身份有三条路径：中间件 <code>tenant_middleware</code>（静默吞 JWTError）、依赖 <code>get_current_user</code>（严格校验）、已废弃的 <code>require_tenant_header</code>。ContextVar 在中间件与 WS 处理器两处设置，生命周期靠 <code>finally clear</code>。前端已不再发 <code>X-Tenant-Id</code>，但后端仍保留死代码，易误导新端点错误复用。</p></div>
+      <div><div class="font-bold text-slate-700">Solution</div><p class="text-slate-600 mt-1">收敛为 <b>AuthContext</b> 深模块：单一 <code>resolve_auth_context(request) -&gt; AuthContext{tenant_id, user_id, role}</code>，同时服务 HTTP 与 WS；中间件仅做 <code>request.state.auth</code> 注入，不再用 ContextVar。删除 <code>require_tenant_header</code> 与 <code>get_tenant_id_from_context</code>，所有业务层改由 <code>Depends(require_auth)</code> 显式获取，杜绝“忘记加依赖就越权”的隐式风险。</p></div>
+      <div><div class="font-bold text-slate-700">Benefits</div><p class="text-slate-600 mt-1"><b>局部性：</b>租户越权测试只需测一处解析器；<b>AI 导航：</b>新端点不再纠结该用中间件还是依赖——只有一种写法。</p></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mt-4">
+      <div class="bg-slate-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-slate-500 tracking-widest mb-2">BEFORE</div>
+        <pre class="mermaid">flowchart LR
+  MW[middleware<br/>ContextVar + swallow] --> Ctx{{ContextVar}}
+  DEP[get_current_user] --> Ctx
+  HDR[require_tenant_header<br/>deprecated] -.-> Ctx
+  style Ctx fill:#fecaca,stroke:#dc2626
+</pre>
+      </div>
+      <div class="bg-indigo-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-indigo-500 tracking-widest mb-2">AFTER</div>
+        <pre class="mermaid">flowchart LR
+  REQ[Request] --> AC[AuthContext Resolver<br/>single source]
+  AC --> HTTP[HTTP deps]
+  AC --> WS[WS handshake]
+  style AC fill:#c7d2fe,stroke:#4f46e5
+</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- CANDIDATE 5 -->
+  <div class="card p-6 mb-6">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <h3 class="font-extrabold text-lg"><span class="text-indigo-600">#5</span> RAG 知识库 — 引入 FileStaging 端口，削薄 Service 门面</h3>
+      <span class="badge b-worth">Worth exploring</span>
+    </div>
+    <div class="text-xs text-slate-500 mt-1">Files: <code>app/kb/service.py (402)</code> · <code>app/kb/parsers.py</code> · <code>app/kb/chunker.py</code> · <code>app/tasks/kb_indexing.py</code> · <code>app/core/redis.py (双客户端)</code></div>
+    <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm leading-relaxed">
+      <div><div class="font-bold text-slate-700">Problem</div><p class="text-slate-600 mt-1"><code>kb/service.py</code> 同时做：扩展名校验、SHA 去重、DB 建记录、<code>get_redis_binary</code> 二进制缓存、Celery 入队、PII 扫描、切分、嵌入、pgvector 写入。Redis 有 <code>get_redis</code>（JSON）与 <code>get_redis_binary</code>（bytes）两套客户端，调用方需自行选对。Worker 与 API 进程的文件传递靠隐式 <code>rag:file:{id}</code> key 约定，无类型约束。</p></div>
+      <div><div class="font-bold text-slate-700">Solution</div><p class="text-slate-600 mt-1">引入 <b>FileStaging</b> 端口（Port/Adapter）：<code>staging.put(id, bytes) / get(id) / delete(id)</code>，背后可为 Redis/Memory/S3。Service 门面拆为 <code>IngestService(upload→stage→enqueue)</code> 与 <code>IndexingService(stage→parse→chunk→embed→store)</code>，共享同一 Staging 端口。PII 扫描抽为独立 <code>PiiScanner</code> 可单测。</p></div>
+      <div><div class="font-bold text-slate-700">Benefits</div><p class="text-slate-600 mt-1">本地测试可用 MemoryStaging，无需 Redis；未来切 S3 只换适配器；API 与 Worker 的隐式 key 约定变为显式接口。</p></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mt-4">
+      <div class="bg-slate-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-slate-500 tracking-widest mb-2">BEFORE</div>
+        <pre class="mermaid">flowchart LR
+  UP[upload_document] --> DB
+  UP --> RB[(Redis binary rag:file:id)]
+  RB --> WK[finalize_index<br/>parse+mask+chunk+embed]
+  style UP fill:#fde68a,stroke:#d97706
+</pre>
+      </div>
+      <div class="bg-indigo-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-indigo-500 tracking-widest mb-2">AFTER</div>
+        <pre class="mermaid">flowchart LR
+  UP[IngestService] --> ST{{FileStaging Port}}
+  ST --> WK[IndexingService]
+  ST -.impl.-> R1[RedisStaging]
+  ST -.impl.-> R2[MemoryStaging<br/>for tests]
+  style ST fill:#c7d2fe,stroke:#4f46e5
+</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- CANDIDATE 6 -->
+  <div class="card p-6 mb-6">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <h3 class="font-extrabold text-lg"><span class="text-indigo-600">#6</span> 前端 Auth &amp; 行为埋点 — 解耦三文件 token 与隐式 tracker</h3>
+      <span class="badge b-worth">Worth exploring</span>
+    </div>
+    <div class="text-xs text-slate-500 mt-1">Files: <code>frontend/src/api/auth-keys.ts</code> · <code>frontend/src/api/client.ts (拦截器+刷新队列)</code> · <code>frontend/src/stores/auth.ts</code> · <code>frontend/src/utils/tracker.ts</code> · <code>frontend/src/router/index.ts</code> · <code>frontend/src/views/*.vue (748/703/634 行)</code></div>
+    <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm leading-relaxed">
+      <div><div class="font-bold text-slate-700">Problem</div><p class="text-slate-600 mt-1">Token 生命周期分散三处：<code>auth-keys.ts</code> 管 localStorage、<code>client.ts</code> 管拦截器+<code>refreshing</code> 单例队列+Cookie 回退、<code>auth.ts</code> 管 Pinia。改一处易漏（曾出现“仅写 localStorage 导致 Pinia 状态过期”已修但结构仍脆）。<code>tracker.ts</code> 被 <code>router/index.ts</code> 直接静态导入，且用 <code>void import(...)</code> 动态导入做 visibility 监听，测试需桩 router。视图层 3 个 600+ 行大组件混有 API 调用与 UI 状态。</p></div>
+      <div><div class="font-bold text-slate-700">Solution</div><p class="text-slate-600 mt-1">建 <b>useAuthSession</b> 组合式深模块：唯一持有 token/refresh/user，提供 <code>login/logout/refresh</code> 与 <code>authHeader()</code>，内部封装 Cookie 降级与队列。<code>client.ts</code> 仅消费它。<code>tracker</code> 改为插件 <code>app.use(behaviorPlugin)</code>，由插件监听 router hook，视图层只发领域事件。抽 <code>useWarnings</code> / <code>useRisk</code> composables 瘦身大视图。</p></div>
+      <div><div class="font-bold text-slate-700">Benefits</div><p class="text-slate-600 mt-1">Token 刷新并发测试只需测一个 composable；埋点可整体 mock 掉；视图层行数减半，AI 改页面时无需读懂埋点细节。</p></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mt-4">
+      <div class="bg-slate-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-slate-500 tracking-widest mb-2">BEFORE</div>
+        <pre class="mermaid">flowchart LR
+  AK[auth-keys.ts] --- CL[client.ts<br/>interceptors + refreshing]
+  CL --- ST[stores/auth.ts]
+  RT[router] --> TR[tracker.ts<br/>static import]
+  style CL fill:#fecaca,stroke:#dc2626
+</pre>
+      </div>
+      <div class="bg-indigo-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-indigo-500 tracking-widest mb-2">AFTER</div>
+        <pre class="mermaid">flowchart LR
+  AS{{useAuthSession<br/>single owner}} --> CL[client.ts]
+  AS --> ST[stores/auth.ts<br/>derived]
+  PL[behaviorPlugin] --> RT[router hooks]
+  PL --> TR[tracker]
+  style AS fill:#c7d2fe,stroke:#4f46e5
+</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- CANDIDATE 7 -->
+  <div class="card p-6 mb-6">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <h3 class="font-extrabold text-lg"><span class="text-indigo-600">#7</span> 审计哈希链 — 抽离 HashChain 深模块，消除 FOR UPDATE 瓶颈</h3>
+      <span class="badge b-spec">Speculative</span>
+    </div>
+    <div class="text-xs text-slate-500 mt-1">Files: <code>app/services/audit_service.py</code> · <code>app/models/audit_log.py</code> · 调用方 <code>app/api/v1/auth.py / warnings.py</code></div>
+    <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm leading-relaxed">
+      <div><div class="font-bold text-slate-700">Problem</div><p class="text-slate-600 mt-1">每次 <code>append_audit_log</code> 都 <code>SELECT ... FOR UPDATE ORDER BY created_at DESC LIMIT 1</code> 取链尾，同一租户并发写入时串行化等待。哈希计算散落在 service 中，校验需全量扫表。当前量级尚可，但作为合规必选链，未来审计写入会随行为事件一起放大。</p></div>
+      <div><div class="font-bold text-slate-700">Solution</div><p class="text-slate-600 mt-1">抽 <b>HashChain</b> 深模块：封装 <code>append(payload) -&gt; record</code> 与 <code>verify(tenant)</code>，内部可演进为：链尾缓存于 Redis（<code>audit:tail:{tenant}</code>）+ DB 兜底，或批量聚合写入。调用方只传领域 payload，无需感知哈希细节。</p></div>
+      <div><div class="font-bold text-slate-700">Benefits</div><p class="text-slate-600 mt-1">审计写入吞吐不再受行锁限制；校验可增量；AI 新增审计点时只需 <code>hashChain.append(...)</code> 一行。</p></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mt-4">
+      <div class="bg-slate-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-slate-500 tracking-widest mb-2">BEFORE</div>
+        <pre class="mermaid">flowchart LR
+  A[auth.py] --> S[audit_service<br/>SELECT FOR UPDATE tail]
+  W[warnings.py] --> S
+  S --> DB[(audit_log)]
+  style S fill:#fde68a,stroke:#d97706
+</pre>
+      </div>
+      <div class="bg-indigo-50 rounded-xl p-3">
+        <div class="text-xs font-bold text-indigo-500 tracking-widest mb-2">AFTER</div>
+        <pre class="mermaid">flowchart LR
+  A --> HC{{HashChain<br/>tail cache + batch}}
+  W --> HC
+  HC --> DB
+  HC --> RD[(Redis tail cache)]
+  style HC fill:#c7d2fe,stroke:#4f46e5
+</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top recommendation -->
+  <div class="card p-6 mb-8 border-2 border-indigo-300">
+    <h2 class="font-extrabold text-lg text-indigo-700">Top 推荐 — 按 ROI 排序</h2>
+    <ol class="list-decimal ml-5 mt-3 space-y-2 text-sm leading-relaxed">
+      <li><b>#1 风险预测管线</b> + <b>#2 特征契约 SSOT</b> — 并行做，回报最高。两者同属预测主链路，热点最高，且 #2 是 #1 的前置依赖（特征构建是管线的 Stage 之一）。一起做可一次性把“改特征要改两处、测预测要桩全链路”两大痛点清零。</li>
+      <li><b>#4 租户隔离收敛</b> — 安全债，改动小但收益明确（删死代码、单测覆盖越权）。适合作为 #1/#2 之间的穿插小 PR。</li>
+      <li><b>#3 / #5 / #6</b> — 按需深化；#6 建议先抽 <code>useAuthSession</code> 再拆大视图，#5 等 RAG 进入第二轮迭代再做。</li>
+      <li><b>#7 审计链</b> — 观察项，当前瓶颈未显现，先加监控（审计写入 P95）再决定是否投入。</li>
+    </ol>
+    <div class="mt-4 p-3 bg-indigo-50 border border-indigo-200 rounded-lg text-xs">
+      <b>下一步：</b>挑一个候选，我将按 <code>grilling</code> 流程与你逐层钻取——约束、依赖、深模块缝的形状、缝后哪些测试保留/新增、是否需更新 <code>CONTEXT.md</code> 或新增 ADR。
+    </div>
+  </div>
+
+  <!-- Appendix: Full review checklist -->
+  <div class="card p-6">
+    <h2 class="font-bold text-lg">附录 — 全量审查清单（非架构类但值得修）</h2>
+    <div class="grid md:grid-cols-2 gap-6 mt-4 text-sm leading-relaxed">
+      <div>
+        <h4 class="font-bold text-slate-700">安全</h4>
+        <ul class="list-disc ml-5 mt-2 space-y-1 text-slate-600">
+          <li><code>app/core/kill_switch.py</code> Redis 不可用时 fail-open（继续预测）符合可用性但需告警埋点，否则静默失效。</li>
+          <li><code>app/api/v1/ws.py</code> token 经 query 传（日志易泄露），建议改 <code>Sec-WebSocket-Protocol</code> 头或建连后首帧鉴权。</li>
+          <li><code>frontend/src/api/client.ts</code> refresh 队列 <code>refreshing</code> 为模块级单例，多 tab 并发可能竞态；考虑 BroadcastChannel 协调。</li>
+        </ul>
+        <h4 class="font-bold text-slate-700 mt-4">性能</h4>
+        <ul class="list-disc ml-5 mt-2 space-y-1 text-slate-600">
+          <li><code>feature_provider.build_behavior_features_from_events</code> 每次都 <code>date_trunc + group by</code>，建议对 (tenant, employee, day) 建物化视图或增量聚合表。</li>
+          <li><code>risk_service.global_explanation</code> 拉 <code>_GLOBAL_EXPLAIN_MAX_RECORDS=20000</code> 行 JSONB 再 <code>to_thread</code> 聚合；可下推为 PG 聚合查询。</li>
+          <li><code>ws.py _connections: dict[str,set[WebSocket]]</code> 内存态，横向扩展即丢连接；后续需 Redis Pub/Sub。</li>
+        </ul>
+      </div>
+      <div>
+        <h4 class="font-bold text-slate-700">工程/测试</h4>
+        <ul class="list-disc ml-5 mt-2 space-y-1 text-slate-600">
+          <li>前端 <code>knip.json</code> 已引入但视图大组件未拆，tree-shaking 收益有限；先拆 composables 再跑 knip。</li>
+          <li><code>backend/app/tasks/*.py</code> 各自 <code>_session_factory()()</code> 创会话，事务边界不一致；建议统一 <code>TaskBase</code>。</li>
+          <li><code>app/core/config.py</code> 47 个字段扁平，建议按 <code>AuthSettings / RagSettings / RateLimitSettings</code> 分组（pydantic nested）。</li>
+          <li><code>.pre-commit-config.yaml</code> 与 <code>frontend/.husky/pre-commit</code> 双轨；统一为一处，避免绕过。</li>
+        </ul>
+        <h4 class="font-bold text-slate-700 mt-4">ML/数据</h4>
+        <ul class="list-disc ml-5 mt-2 space-y-1 text-slate-600">
+          <li><code>shap_explainer.py</code> 同步 <code>explain</code> 已改为 <code>to_thread</code>，但仍在请求线程内阻塞；可改为 Celery 异步回填。</li>
+          <li><code>data_generation.py (353)</code> 合成数据逻辑与 <code>feature_engineering</code> 紧耦，改分布需两处同步——正好由 #2 一并收敛。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="text-center text-xs text-slate-400 mt-8">Generated 2026-08-29 · HRA Architecture Review · Tailwind + Mermaid · 7 candidates</div>
+</div>
+</body>
+</html>

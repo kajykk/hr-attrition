@@ -24,25 +24,40 @@ const menu = computed(() => {
   return allMenu.filter((m) => !m.roles || m.roles.includes(role))
 })
 
-const collapsed = ref(localStorage.getItem('hra_sidebar_collapsed') === '1')
+// 侧边栏状态持久化键（集中定义，避免魔法字符串散落）
+const SIDEBAR_KEY = 'hra_sidebar_collapsed'
+const NARROW_BREAKPOINT = 768
+
+const collapsed = ref(localStorage.getItem(SIDEBAR_KEY) === '1')
 const isNarrow = ref(false)
 
+let resizeTimer: ReturnType<typeof setTimeout> | null = null
+
+function applyNarrow(narrow: boolean) {
+  isNarrow.value = narrow
+  // 仅在跨入窄屏时自动折叠；窄屏内的后续 resize 不再覆盖用户展开偏好
+  if (narrow) collapsed.value = true
+}
+
 function handleResize() {
-  isNarrow.value = window.innerWidth < 768
-  if (isNarrow.value) collapsed.value = true
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(() => {
+    applyNarrow(window.innerWidth < NARROW_BREAKPOINT)
+  }, 120)
 }
 
 onMounted(() => {
-  handleResize()
+  applyNarrow(window.innerWidth < NARROW_BREAKPOINT)
   window.addEventListener('resize', handleResize)
 })
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  if (resizeTimer) clearTimeout(resizeTimer)
 })
 
 function toggleSidebar() {
   collapsed.value = !collapsed.value
-  localStorage.setItem('hra_sidebar_collapsed', collapsed.value ? '1' : '0')
+  localStorage.setItem(SIDEBAR_KEY, collapsed.value ? '1' : '0')
 }
 
 function handleLogout() {

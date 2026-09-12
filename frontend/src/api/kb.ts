@@ -1,5 +1,6 @@
 // RAG 知识库 API：文档管理（multipart 上传）+ 问答（同步 JSON / SSE 流式）
 import { apiClient, buildAuthHeaders, extractApiError } from '@/api/client'
+import { consumeSSE } from '@/api/sse'
 
 export interface KbDocument {
   id: string
@@ -74,10 +75,11 @@ export async function queryKnowledgeBase(question: string): Promise<KbQueryResul
   }
 }
 
-// SSE 流式问答：onToken 逐段回调；resolve 于 done 帧
+// SSE 流式问答：onToken 逐段回调；resolve 于 done 帧；signal 可选中止
 export function streamKnowledgeBase(
   question: string,
   onToken: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<KbQueryResult> {
   return new Promise((resolve, reject) => {
     void (async () => {
@@ -86,6 +88,7 @@ export function streamKnowledgeBase(
           method: 'POST',
           headers: buildAuthHeaders(),
           body: JSON.stringify({ question }),
+          ...(signal ? { signal } : {}),
         })
         if (!resp.ok || !resp.body) {
           const detail = await resp.json().catch(() => null)
@@ -93,38 +96,23 @@ export function streamKnowledgeBase(
           return
         }
 
-        const reader = resp.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
         let result: KbQueryResult | null = null
-
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          // SSE 帧以空行分隔
-          let sep: number
-          while ((sep = buffer.indexOf('\n\n')) >= 0) {
-            const frame = buffer.slice(0, sep)
-            buffer = buffer.slice(sep + 2)
-            let event = 'message'
-            let payload = ''
-            for (const line of frame.split('\n')) {
-              if (line.startsWith('event:')) event = line.slice(6).trim()
-              else if (line.startsWith('data:')) payload += line.slice(5).trim()
-            }
-            if (!payload) continue
-            const parsed = JSON.parse(payload) as Record<string, unknown>
+        await consumeSSE(
+          resp,
+          ({ event, data }) => {
+            const parsed = JSON.parse(data) as Record<string, unknown>
             if (event === 'token') onToken(parsed.text as string)
-            else if (event === 'done')
-              result = parsed as unknown as KbQueryResult
+            else if (event === 'done') result = parsed as unknown as KbQueryResult
             else if (event === 'error')
               reject(new Error((parsed.detail as string) || '生成中断'))
-          }
-        }
+          },
+          signal,
+        )
         if (result) resolve(result)
         else reject(new Error('流式响应未返回结果'))
       } catch (e) {
+        // 主动中止：静默结束（不作为错误抛给界面）
+        if (signal?.aborted) return
         reject(e instanceof Error ? e : new Error('流式请求异常'))
       }
     })()

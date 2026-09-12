@@ -1,5 +1,6 @@
 """风险预测路由（D05 3.3 + 3.10 全局解释 + 3.3 SHAP 解释 + 行为事件扩容）."""
 import csv
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from typing import Literal
@@ -66,6 +67,17 @@ async def _record_prediction_viewed(
     )
 
 
+def _coerce_prediction_id(result: dict, fallback: UUID) -> UUID:
+    """从预测结果 dict 归一化 prediction_id（缓存命中时为字符串，否则为 None）."""
+    pred_id = result.get("prediction_id") or str(fallback)
+    if isinstance(pred_id, str):
+        try:
+            pred_id = UUID(pred_id)
+        except (ValueError, AttributeError):
+            pred_id = fallback
+    return pred_id
+
+
 @router.get("/employees/{employee_id}", response_model=RiskPredictionOut)
 async def get_employee_risk(
     employee_id: UUID,
@@ -81,13 +93,7 @@ async def get_employee_risk(
     result = await RiskService.predict(
         employee_id, tenant_id, force_refresh=force_refresh, db=db
     )
-    # prediction_id 可能是字符串（来自缓存）或 UUID
-    pred_id = result.get("prediction_id") or str(employee_id)
-    if isinstance(pred_id, str):
-        try:
-            pred_id = UUID(pred_id)
-        except (ValueError, AttributeError):
-            pred_id = employee_id
+    pred_id = _coerce_prediction_id(result, employee_id)
 
     await _record_prediction_viewed(
         db, tenant_id, employee_id,
@@ -120,12 +126,7 @@ async def predict_risk(
     result = await RiskService.predict(
         payload.employee_id, tenant_id, force_refresh=payload.force_refresh, db=db
     )
-    pred_id = result.get("prediction_id") or str(payload.employee_id)
-    if isinstance(pred_id, str):
-        try:
-            pred_id = UUID(pred_id)
-        except (ValueError, AttributeError):
-            pred_id = payload.employee_id
+    pred_id = _coerce_prediction_id(result, payload.employee_id)
     return RiskPredictionOut(
         prediction_id=pred_id,
         employee_id=payload.employee_id,
@@ -170,12 +171,7 @@ async def get_employee_explanation(
             for f in shap_factors
         ]
 
-    pred_id = result.get("prediction_id") or str(employee_id)
-    if isinstance(pred_id, str):
-        try:
-            pred_id = UUID(pred_id)
-        except (ValueError, AttributeError):
-            pred_id = employee_id
+    pred_id = _coerce_prediction_id(result, employee_id)
 
     # base_value 用 0.0 占位（TreeExplainer 的期望值，简化处理）
     # output_value = risk_score / 100（归一化到 0-1）
@@ -233,17 +229,23 @@ async def export_risk_report(
     )
     rows = (await db.execute(stmt)).scalars().all()
 
-    buf = StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([
-        "prediction_id", "employee_id", "model_version",
-        "risk_score", "risk_level", "predicted_at",
-    ])
-    for r in rows:
+    def _csv_stream() -> Iterator[str]:
+        """逐行生成 CSV（避免整表拼接为单个大字符串）."""
+        sio = StringIO()
+        writer = csv.writer(sio)
         writer.writerow([
-            str(r.id), str(r.employee_id), r.model_version,
-            r.risk_score, r.risk_level, r.predicted_at.isoformat(),
+            "prediction_id", "employee_id", "model_version",
+            "risk_score", "risk_level", "predicted_at",
         ])
+        yield sio.getvalue()
+        for r in rows:
+            sio.seek(0)
+            sio.truncate(0)
+            writer.writerow([
+                str(r.id), str(r.employee_id), r.model_version,
+                r.risk_score, r.risk_level, r.predicted_at.isoformat(),
+            ])
+            yield sio.getvalue()
 
     # 行为事件（best-effort）：report_exported
     try:
@@ -267,7 +269,7 @@ async def export_risk_report(
 
     filename = f"risk_report_{datetime.now(UTC).strftime('%Y%m%d')}.csv"
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        _csv_stream(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

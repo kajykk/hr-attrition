@@ -40,24 +40,29 @@ apiClient.interceptors.request.use(
 let refreshing: Promise<string | null> | null = null
 
 async function refreshAccessToken(): Promise<string | null> {
-  const refresh = getRefreshToken()
-  if (!refresh) return null
+  // 凭据来源：优先 HttpOnly Cookie（新版后端，请求体留空）；
+  // 兼容历史会话遗留的 localStorage refresh token 作为请求体回退。
+  const legacyRefresh = getRefreshToken()
+  if (!legacyRefresh && !hasSessionHint()) return null
   try {
-    // 后端实现 refresh 轮换：旧 token 进黑名单，响应携带新 refresh_token
-    const { data } = await axios.post<RefreshResponse>('/api/v1/auth/refresh', {
-      refresh_token: refresh,
-    })
+    // 后端实现 refresh 轮换：旧 token 进黑名单（cookie 模式下新凭据经 Set-Cookie 回发）
+    const { data } = await axios.post<RefreshResponse>(
+      '/api/v1/auth/refresh',
+      legacyRefresh ? { refresh_token: legacyRefresh } : {},
+      { timeout: 10000 },
+    )
     localStorage.setItem(AUTH_KEYS.token, data.access_token)
     if (data.refresh_token) {
       localStorage.setItem(AUTH_KEYS.refreshToken, data.refresh_token)
+    } else {
+      // 新版后端：凭据走 cookie，保持存储清洁
+      localStorage.removeItem(AUTH_KEYS.refreshToken)
     }
     // 同步 Pinia auth store（组件层读取的是 store.token，仅写 localStorage 会导致状态过期）
     try {
       const auth = useAuthStore()
       auth.token = data.access_token
-      if (data.refresh_token) {
-        auth.refreshToken = data.refresh_token
-      }
+      auth.refreshToken = data.refresh_token || ''
     } catch {
       // pinia 未激活的极端场景：localStorage 已更新，不阻塞刷新流程
     }
@@ -65,6 +70,11 @@ async function refreshAccessToken(): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/** 会话线索：有 access token 或遗留 refresh token 才尝试刷新 */
+function hasSessionHint(): boolean {
+  return !!getAccessToken()
 }
 
 function redirectToLogin(): void {

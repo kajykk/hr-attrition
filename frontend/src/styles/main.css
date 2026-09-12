@@ -43,7 +43,9 @@ a {
   text-decoration: none;
 }
 
-button {
+/* 全局原生控件样式：排除 Element Plus 内部节点（class 含 el- 前缀），
+   避免覆盖组件库自身的按钮/输入框渲染（知识库视图使用 EP 组件） */
+button:not([class*="el-"]) {
   cursor: pointer;
   border: none;
   border-radius: 6px;
@@ -54,11 +56,11 @@ button {
   transition: opacity 0.15s, background 0.15s;
 }
 
-button:hover {
+button:not([class*="el-"]):hover {
   opacity: 0.9;
 }
 
-button:disabled {
+button:not([class*="el-"]):disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -76,7 +78,7 @@ button.success-btn {
   background: var(--color-success);
 }
 
-input, select, textarea {
+input:not([class*="el-"]), select:not([class*="el-"]), textarea:not([class*="el-"]) {
   font-family: inherit;
   font-size: 14px;
   padding: 8px 12px;
@@ -88,7 +90,7 @@ input, select, textarea {
   transition: border-color 0.15s;
 }
 
-input:focus, select:focus, textarea:focus {
+input:not([class*="el-"]):focus, select:not([class*="el-"]):focus, textarea:not([class*="el-"]):focus {
   border-color: var(--color-primary);
 }
 

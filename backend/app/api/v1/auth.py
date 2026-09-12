@@ -12,7 +12,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import pyotp
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +44,36 @@ logger = get_logger(__name__)
 
 # refresh token 轮换黑名单 key 前缀（Redis）：auth:rt_bl:{jti} = "1"
 _REFRESH_BLACKLIST_PREFIX = "auth:rt_bl:"
+
+# HttpOnly refresh cookie：Path 限定 auth 端点，避免随业务请求外发
+_REFRESH_COOKIE_PATH = "/api/v1/auth"
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    """下发 refresh token HttpOnly Cookie（XSS 缓解：不落入 JS 可读存储）.
+
+    secure 仅生产启用（本地 http 开发需为 False 才能写入）；
+    SameSite=Strict + Path 限定，CSRF/外发面最小化。
+    """
+    if not settings.AUTH_REFRESH_COOKIE_ENABLED:
+        return
+    response.set_cookie(
+        key=settings.REFRESH_COOKIE_NAME,
+        value=token,
+        max_age=settings.JWT_REFRESH_EXPIRE_DAYS * 86400,
+        httponly=True,
+        secure=settings.is_prod,
+        samesite="strict",
+        path=_REFRESH_COOKIE_PATH,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    """清除 refresh cookie（登出时调用；Path 必须与写入一致）."""
+    response.delete_cookie(
+        settings.REFRESH_COOKIE_NAME,
+        path=_REFRESH_COOKIE_PATH,
+    )
 
 
 async def _log_auth_event(
@@ -116,7 +146,12 @@ def _verify_totp(user: User, code: str | None) -> None:
 
 @router.post("/login", response_model=LoginResult)
 @login_limit()
-async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     """用户登录（D05 3.1 POST /auth/login）.
 
     返回 access_token (30min) + refresh_token (7d) + user 信息。
@@ -124,6 +159,9 @@ async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depe
     限流：按 IP RATE_LIMIT_LOGIN（默认 5/minute），防密码爆破。
     防爆破：连续失败 ≥ LOGIN_MAX_FAILED_ATTEMPTS（默认 5）次锁定
     LOGIN_LOCKOUT_MINUTES（默认 15 分钟），期间直接拒绝（不泄露密码对错）。
+
+    Refresh token 下发：默认经 HttpOnly Cookie（响应体不再返回，XSS 缓解）；
+    AUTH_REFRESH_COOKIE_ENABLED=false 时回退请求体下发（旧客户端兼容）。
     """
     stmt = select(User).where(
         User.email == payload.email,
@@ -184,9 +222,16 @@ async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depe
     access = create_access_token(str(user.id), str(user.tenant_id), user.role)
     refresh = create_refresh_token(str(user.id), str(user.tenant_id))
 
+    if settings.AUTH_REFRESH_COOKIE_ENABLED:
+        # HttpOnly Cookie 下发：响应体不携带长期凭据
+        _set_refresh_cookie(response, refresh)
+        body_refresh: str | None = None
+    else:
+        body_refresh = refresh
+
     return LoginResult(
         access_token=access,
-        refresh_token=refresh,
+        refresh_token=body_refresh,
         expires_in=settings.JWT_ACCESS_EXPIRE_MINUTES * 60,
         user=UserOut(
             id=user.id,
@@ -223,18 +268,32 @@ async def _blacklist_refresh_jti(jti: str, exp: int | float) -> bool:
 
 
 @router.post("/refresh", response_model=RefreshResponse)
-async def refresh_token(payload: RefreshRequest, db: AsyncSession = Depends(get_db)):
+async def refresh_token(
+    payload: RefreshRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     """刷新令牌（D05 3.1 POST /auth/refresh）.
 
     除 JWT 解码外，还校验用户仍存在且 active（防止已删除/禁用用户续期）。
 
+    凭据来源：优先请求体（旧客户端），否则读取 HttpOnly Cookie。
+
     轮换机制：
       1. 解码取 jti；黑名单命中 → 旧 token 重放，401 拒绝
       2. 校验通过后将旧 jti 以剩余有效期为 TTL 写入黑名单（NX 保证一次性）
-      3. 签发新 access + 新 refresh（响应回发新 refresh_token）
+      3. 签发新 access + 新 refresh（cookie 启用时经 Set-Cookie 回发并轮换）
     """
+    token_str = payload.refresh_token or request.cookies.get(settings.REFRESH_COOKIE_NAME) or ""
+    if not token_str:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="缺少 refresh_token（请求体或 cookie）",
+        )
+
     try:
-        decoded = decode_token(payload.refresh_token)
+        decoded = decode_token(token_str)
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="refresh_token 无效")
 
@@ -290,8 +349,35 @@ async def refresh_token(payload: RefreshRequest, db: AsyncSession = Depends(get_
 
     access = create_access_token(user_id, tenant_id, user.role)
     new_refresh = create_refresh_token(user_id, tenant_id)
+
+    if settings.AUTH_REFRESH_COOKIE_ENABLED:
+        _set_refresh_cookie(response, new_refresh)
+        body_refresh: str | None = None
+    else:
+        body_refresh = new_refresh
+
     return RefreshResponse(
         access_token=access,
         expires_in=settings.JWT_ACCESS_EXPIRE_MINUTES * 60,
-        refresh_token=new_refresh,
+        refresh_token=body_refresh,
     )
+
+
+@router.post("/logout")
+async def logout(request: Request, response: Response) -> dict:
+    """登出：吊销 HttpOnly Cookie 中的 refresh jti（best-effort）并清除 cookie.
+
+    无需认证（幂等）：即使 token 已过期/无效也返回 200 并清 cookie，
+    保证前端任何状态下都能完成本地登出。
+    """
+    cookie_token = request.cookies.get(settings.REFRESH_COOKIE_NAME) or ""
+    if cookie_token:
+        try:
+            decoded = decode_token(cookie_token)
+            jti = decoded.get("jti")
+            if decoded.get("type") == "refresh" and jti:
+                await _blacklist_refresh_jti(str(jti), decoded.get("exp", time.time()))
+        except JWTError:
+            pass  # 无效/过期 token：无需吊销，直接清 cookie
+    _clear_refresh_cookie(response)
+    return {"logged_out": True}

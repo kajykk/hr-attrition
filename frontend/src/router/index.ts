@@ -1,6 +1,7 @@
 // 路由配置 - 7 个核心路由 + 404 + 角色守卫（D05 端点对应）
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { endRouteDwell, startRouteDwell } from '@/utils/tracker'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -64,12 +65,36 @@ router.beforeEach((to) => {
     return { name: 'dashboard' }
   }
   const roles = to.meta.roles as string[] | undefined
-  if (roles && auth.user && !roles.includes(auth.user.role)) {
+  // 角色受限页要求用户信息可用：token 存在但 user 缺失（存储损坏/未初始化）
+  // 时同样拒绝，防止守卫被整体跳过直达 admin 页
+  if (roles && (!auth.user || !roles.includes(auth.user.role))) {
     return { name: 'dashboard' }
   }
 
   const title = (to.meta.title as string) || ''
   document.title = title ? `${TITLE_PREFIX} | ${title}` : TITLE_PREFIX
+
+  // 行为埋点：路由进入启动页面停留计时（登录页/public 页不埋点）
+  if (!to.meta.public) {
+    startRouteDwell(String(to.name || 'anonymous'), to.fullPath)
+  }
 })
+
+// 路由离开：结算页面停留并上报（nextTick 保证目标路由生效后再结算）
+router.afterEach(() => {
+  endRouteDwell()
+})
+
+// 页面可见性：切后台暂停计时、回前台恢复（移动端切应用/切标签页）
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      // 需要 import 的 pause/resume
+      void import('@/utils/tracker').then(({ pauseRouteDwell }) => pauseRouteDwell())
+    } else {
+      void import('@/utils/tracker').then(({ resumeRouteDwell }) => resumeRouteDwell())
+    }
+  })
+}
 
 export default router

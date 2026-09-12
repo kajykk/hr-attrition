@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     LOGIN_MAX_FAILED_ATTEMPTS: int = 5
     LOGIN_LOCKOUT_MINUTES: int = 15
 
+    # ===== Refresh Token HttpOnly Cookie（XSS 缓解） =====
+    # 启用后：login/refresh 通过 HttpOnly Cookie 下发 refresh token，
+    # 响应体不再返回（长期凭据不落入 JS 可读存储）；refresh 优先读 cookie、
+    # 兼容请求体旧格式。Cookie Path 限定 /api/v1/auth，SameSite=Strict。
+    AUTH_REFRESH_COOKIE_ENABLED: bool = True
+    REFRESH_COOKIE_NAME: str = "hra_rt"
+
     # ===== PII Fernet 加密（ADR-007） =====
     PII_FERNET_KEY: str = "change-me-generate-fernet-key"
     PII_KEY_ROTATION_DAYS: int = 90

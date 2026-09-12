@@ -6,3 +6,15 @@
         entry: E:/code/.tools/gitleaks.exe protect --staged --redact -v
         language: system
         pass_filenames: false
+
+  # ===== Frontend: ESLint =====
+  # 使用本地安装的 eslint (language: system)，避免 pre-commit 独立安装
+  - repo: local
+    hooks:
+      - id: eslint
+        name: ESLint (frontend)
+        entry: bash -c 'cd frontend && npx eslint src --ext .vue,.ts,.tsx,.js,.jsx'
+        language: system
+        files: ^frontend/src/.*\.(vue|ts|tsx|js|jsx)$
+        pass_filenames: false
+        types: [file]

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://unpkg.com/knip@6.33.0/schema.json",
+  "ignore": [
+    "src/auto-imports.d.ts",
+    "src/components.d.ts",
+    "vite.config.d.ts",
+    "vite.config.js"
+  ],
+  "ignoreUnresolved": [
+    "vite/client"
+  ],
+  "ignoreDependencies": [
+    "@vitejs/plugin-vue"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/main.ts",
+        "src/App.vue",
+        "src/router/index.ts",
+        "vite.config.ts"
+      ]
+    }
+  }
+}

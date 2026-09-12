@@ -1,6 +1,7 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
+import { fmtTime } from '@/utils/format'
 // 员工管理视图 - 列表表格 + 服务端搜索 + 分页 + 风险色块，点击跳转风险预测
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiClient, extractApiError } from '@/api/client'
 import type { EmployeeListItem, Paginated } from '@/api/types'
@@ -38,8 +39,14 @@ watch(searchKeyword, () => {
     fetchEmployees()
   }, 350)
 })
+// 卸载时清理：防止防抖回调在组件卸载后触发无效请求
+onUnmounted(() => window.clearTimeout(searchTimer))
+
+// 过期响应防护：快速翻页/连续搜索时，仅采纳最新一次请求的结果
+let fetchSeq = 0
 
 async function fetchEmployees() {
+  const seq = ++fetchSeq
   loading.value = true
   errorMsg.value = ''
   try {
@@ -49,10 +56,12 @@ async function fetchEmployees() {
     const { data } = await apiClient.get<Paginated<EmployeeListItem>>('/api/v1/employees', {
       params,
     })
+    if (seq !== fetchSeq) return // 已有更新的请求，丢弃本次过期响应
     items.value = data.items
     total.value = data.total
     demoMode.value = false
   } catch (e: unknown) {
+    if (seq !== fetchSeq) return
     errorMsg.value = extractApiError(e, '员工列表加载失败')
     if (allowDemo) {
       demoMode.value = true
@@ -92,14 +101,6 @@ function nextPage() {
   }
 }
 
-function fmtTime(s: string) {
-  if (!s) return '-'
-  try {
-    return new Date(s).toLocaleString('zh-CN', { hour12: false })
-  } catch {
-    return s
-  }
-}
 
 function statusLabel(s: string) {
   const map: Record<string, string> = {

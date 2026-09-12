@@ -1,4 +1,5 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
+import { fmtTime } from '@/utils/format'
 // 预警中心视图 - 列表 + 筛选 + 分页 + 详情面板 + 状态机转换 + 申诉 + 标记
 import { ref, computed, onMounted } from 'vue'
 import { apiClient, extractApiError } from '@/api/client'
@@ -136,6 +137,9 @@ function levelBadgeClass(level: string) {
   return `badge-${level.toLowerCase()}`
 }
 
+// 详情拉取序号：快速切换展开行时，仅采纳最后一次请求（防慢响应覆盖新行）
+let detailSeq = 0
+
 async function toggleDetail(w: WarningOut) {
   if (expandedId.value === w.id) {
     expandedId.value = null
@@ -143,13 +147,15 @@ async function toggleDetail(w: WarningOut) {
     return
   }
   expandedId.value = w.id
+  const seq = ++detailSeq
   // 拉取详情
   try {
     const { data } = await apiClient.get<WarningOut>(`/api/v1/warnings/${w.id}`)
+    if (seq !== detailSeq || expandedId.value !== w.id) return // 已切换到其他行
     expandedItem.value = data
   } catch {
-    // 接口失败就用列表项
-    expandedItem.value = w
+    // 接口失败就用列表项（仅当仍停留在该行）
+    if (seq === detailSeq && expandedId.value === w.id) expandedItem.value = w
   }
 }
 
@@ -256,14 +262,6 @@ function nextPage() {
   }
 }
 
-function fmtTime(s: string | null) {
-  if (!s) return '-'
-  try {
-    return new Date(s).toLocaleString('zh-CN', { hour12: false })
-  } catch {
-    return s
-  }
-}
 
 function onFilterChange() {
   page.value = 1

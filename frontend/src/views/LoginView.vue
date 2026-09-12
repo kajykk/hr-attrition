@@ -1,16 +1,20 @@
 <script setup lang="ts">
-// 登录视图 - 邮箱+密码（+可选 TOTP），预填 demo 账号
+// 登录视图 - 邮箱+密码（+可选 TOTP）；演示账号仅开发环境展示/预填
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { extractApiError } from '@/api/client'
 
 const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
 
-// 预填 demo 账号（W6 演示）
-const email = ref('admin@hra.demo')
-const password = ref('admin123')
+// 演示凭据仅限开发环境（生产构建不得泄露管理员入口账密）
+const allowDemo = import.meta.env.DEV
+
+// 预填 demo 账号（W6 演示，仅 DEV）
+const email = ref(allowDemo ? 'admin@hra.demo' : '')
+const password = ref(allowDemo ? 'admin123' : '')
 const totpCode = ref('')
 const loading = ref(false)
 const errorMsg = ref('')
@@ -21,10 +25,14 @@ async function handleLogin() {
   try {
     await auth.login(email.value, password.value, totpCode.value || undefined)
     const redirect = (route.query.redirect as string) || '/dashboard'
-    router.push(redirect)
+    // 仅接受站内相对路径（防 '//evil.com' 类异常导航）
+    const safeRedirect =
+      typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+        ? redirect
+        : '/dashboard'
+    void router.push(safeRedirect)
   } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string } } }
-    errorMsg.value = err?.response?.data?.detail || '登录失败，请检查邮箱与密码'
+    errorMsg.value = extractApiError(e, '登录失败，请检查邮箱与密码')
   } finally {
     loading.value = false
   }
@@ -94,11 +102,15 @@ function fillDemo() {
           {{ loading ? '登录中...' : '登录' }}
         </button>
       </form>
-      <div class="demo-tip">
+      <div
+        v-if="allowDemo"
+        class="demo-tip"
+      >
         <span>演示账号：</span>
         <code>admin@hra.demo</code> / <code>admin123</code>
         <button
           class="link-btn"
+          type="button"
           @click="fillDemo"
         >
           填入

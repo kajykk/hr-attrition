@@ -1,4 +1,5 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
+import { fmtTime } from '@/utils/format'
 // 风险预测视图 - 预测卡片 + 各模态分 + SHAP 归因 + 全局特征重要性
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -101,11 +102,16 @@ async function predict() {
   }
 }
 
+// 解释拉取序号：快速连续预测时丢弃过期响应，防止 SHAP 卡片与当前员工错配
+let explainSeq = 0
+
 async function loadExplanation(empId: string) {
+  const seq = ++explainSeq
   try {
     const { data } = await apiClient.get<ShapExplanationOut>(
       `/api/v1/risk/employees/${empId}/explanation`
     )
+    if (seq !== explainSeq || employeeId.value !== empId) return // 已切换员工
     explanation.value = data
   } catch {
     // 解释失败：不静默填充假数据，生产环境保留空态
@@ -154,14 +160,6 @@ function fillDemoExplanation() {
   }
 }
 
-function fmtTime(s: string) {
-  if (!s) return '-'
-  try {
-    return new Date(s).toLocaleString('zh-CN', { hour12: false })
-  } catch {
-    return s
-  }
-}
 
 // 路由 query 变化时自动预测
 watch(
